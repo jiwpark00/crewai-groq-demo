@@ -1,0 +1,16 @@
+teaching_task:
+  description: >
+    User request: {user_prompt}
+
+    Explain the relevant agentic AI concepts in 5 beginner-friendly bullet points.
+    When useful, mention packages like CrewAI, Google ADK, LangGraph, AutoGen, etc.
+  expected_output: A short beginner-friendly bullet list with relevant packages.
+  agent: teacher
+
+project_task:
+  description: >
+    Using the previous explanation, suggest 3 entrepreneur-friendly projects.
+    For each project, include the goal, KPI, recommended package
+    (CrewAI, LangGraph, Google ADK, AutoGen, etc.), and why that package fits.
+  expected_output: Three practical entrepreneur project ideas with recommended packages and KPI.
+  agent: project_advisor

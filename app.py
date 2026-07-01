@@ -1,5 +1,5 @@
 import streamlit as st
-from crew_logic import run_crew
+from crewai_groq_demo.crew import run_crew
 
 st.set_page_config(
     page_title="CrewAI Groq Demo",

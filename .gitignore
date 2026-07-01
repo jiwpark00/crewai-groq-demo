@@ -13,3 +13,6 @@ wheels/
 __pycache__/
 .DS_Store
 output.md
+
+# Local-only Claude Code context
+CLAUDE.md
