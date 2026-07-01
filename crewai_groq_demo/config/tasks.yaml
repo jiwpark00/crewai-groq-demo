@@ -1,16 +1,35 @@
 teaching_task:
   description: >
-    User request: {user_prompt}
+    The user asked: "{user_prompt}"
 
-    Explain the relevant agentic AI concepts in 5 beginner-friendly bullet points.
-    When useful, mention packages like CrewAI, Google ADK, LangGraph, AutoGen, etc.
-  expected_output: A short beginner-friendly bullet list with relevant packages.
+    Explain the agentic AI concepts most relevant to this specific request.
+    Tailor the explanation to whatever audience, domain, or use case the user
+    mentioned (e.g. a profession, field, or scenario) instead of giving a
+    generic overview. Match the depth, number of points, and framing to what
+    was actually asked — if the user requested a specific number of points or
+    ideas, use that number. When useful, mention relevant packages like
+    CrewAI, Google ADK, LangGraph, AutoGen, etc.
+  expected_output: >
+    An explanation of agentic AI concepts tailored to the user's specific
+    audience, domain, and requested format — not a generic overview.
   agent: teacher
 
 project_task:
   description: >
-    Using the previous explanation, suggest 3 entrepreneur-friendly projects.
-    For each project, include the goal, KPI, recommended package
-    (CrewAI, LangGraph, Google ADK, AutoGen, etc.), and why that package fits.
-  expected_output: Three practical entrepreneur project ideas with recommended packages and KPI.
+    The user asked: "{user_prompt}"
+
+    The teaching agent produced this explanation:
+    ---
+    {teaching_result}
+    ---
+
+    Using that explanation, suggest concrete project or use-case ideas that
+    match what the user actually asked for — their stated audience, domain,
+    and requested count (default to 3 if no count was specified). For each
+    idea, include the goal, a KPI, a recommended package (CrewAI, LangGraph,
+    Google ADK, AutoGen, etc.), and why that package fits.
+  expected_output: >
+    A list of project/use-case ideas tailored to the user's specific
+    audience, domain, and requested count, each with a goal, KPI, and
+    recommended package.
   agent: project_advisor

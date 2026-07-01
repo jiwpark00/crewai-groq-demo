@@ -1,7 +1,7 @@
 import os
 
 from crewai import Agent, Crew, LLM, Task
-from crewai.project import CrewBase, agent, crew, task
+from crewai.project import CrewBase, agent, task
 from dotenv import load_dotenv
 
 # Temporary workaround for CrewAI + Groq:
@@ -45,13 +45,28 @@ class GroqDemoCrew:
     def project_task(self) -> Task:
         return Task(config=self.tasks_config["project_task"])
 
-    @crew
-    def crew(self) -> Crew:
-        return Crew(agents=self.agents, tasks=self.tasks)
+
+def run_teaching(user_prompt: str) -> str:
+    """Run only the teacher agent and return its explanation."""
+    crew_definition = GroqDemoCrew()
+    crew = Crew(
+        agents=[crew_definition.teacher()],
+        tasks=[crew_definition.teaching_task()],
+    )
+    result = crew.kickoff(inputs={"user_prompt": user_prompt})
+    return str(result)
 
 
-def run_crew(user_prompt: str) -> str:
-    result = GroqDemoCrew().crew().kickoff(inputs={"user_prompt": user_prompt})
+def run_project(user_prompt: str, teaching_result: str) -> str:
+    """Run the project advisor using the teacher's explanation as input."""
+    crew_definition = GroqDemoCrew()
+    crew = Crew(
+        agents=[crew_definition.project_advisor()],
+        tasks=[crew_definition.project_task()],
+    )
+    result = crew.kickoff(
+        inputs={"user_prompt": user_prompt, "teaching_result": teaching_result}
+    )
     result_text = str(result)
 
     with open("output.md", "w", encoding="utf-8") as file:
