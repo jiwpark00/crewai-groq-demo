@@ -114,6 +114,7 @@ def test_succeeds_on_first_attempt() -> None:
         retries=0,
         queries=("first query",),
         usage=UsageMetrics(),
+        search_depth="basic",
     )
 
 
@@ -204,6 +205,46 @@ def test_researcher_agent_uses_tavily_settings(monkeypatch: pytest.MonkeyPatch) 
     assert tool.search_depth == "advanced"
 
 
+def test_researcher_agent_search_depth_override_wins_over_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TAVILY_SEARCH_DEPTH", "advanced")
+    get_settings.cache_clear()
+
+    researcher_agent = GroqDemoCrew(search_depth="basic").researcher()
+
+    assert researcher_agent.tools[0].search_depth == "basic"
+
+
+def test_researcher_instance_matches_task_resolved_agent() -> None:
+    """Regression test for a real bug caught via live testing: CrewBase's
+    metaclass eagerly resolves tasks.yaml's `agent: researcher` string by
+    calling `self.researcher()` with *no arguments* during `GroqDemoCrew.__init__`
+    (see `_map_task_variables` in crewai/project/crew_base.py), and @agent's
+    memoize decorator keys its cache by exact call args. `researcher()` used to
+    take a `search_depth` kwarg — calling it that way built a second, different
+    Agent/tool instance than the one CrewAI's sequential executor actually runs
+    (which uses `task.agent`, not whatever's passed to `Crew(agents=[...])` —
+    see `_get_agent_to_use` in crewai/crew.py). Confirmed live: Tavily's own
+    usage counter went up by 2 credits on a run our code reported as 0 searches,
+    because we were inspecting the untracked, never-executed instance.
+
+    `search_depth` now lives on `GroqDemoCrew.__init__` instead, so every call
+    to `researcher()` is args-identical and always resolves to the one real,
+    memoized instance. This test doesn't call kickoff() (no live API calls) —
+    it only checks object identity through CrewAI's real, unmocked
+    Task-config resolution.
+    """
+    crew_definition = GroqDemoCrew(search_depth="advanced")
+
+    research_task = crew_definition.research_task()
+    researcher_agent = crew_definition.researcher()
+
+    assert research_task.agent is researcher_agent
+    assert research_task.agent.tools[0] is researcher_agent.tools[0]
+    assert researcher_agent.tools[0].search_depth == "advanced"
+
+
 def test_captures_token_usage_from_successful_attempt() -> None:
     usage = UsageMetrics(prompt_tokens=100, completion_tokens=50, total_tokens=150)
     side_effect = _kickoff_side_effect([_succeed_with_usage("findings", "q1", usage)])
@@ -228,3 +269,33 @@ def test_serves_repeat_prompt_from_cache_without_calling_kickoff_again() -> None
     assert second.from_cache is True
     assert second.text == "first run findings"
     assert second.successful_search_count == first.successful_search_count
+
+
+def test_run_research_uses_search_depth_override() -> None:
+    side_effect = _kickoff_side_effect([_succeed_with("findings", "q1")])
+
+    with patch("crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect):
+        result = run_research("teach me about agents", search_depth="advanced")
+
+    assert result.search_depth == "advanced"
+
+
+def test_run_research_cache_key_distinguishes_by_search_depth() -> None:
+    """A repeat prompt with a *different* search_depth is a different request —
+    it must not be served from a cached result for the other depth.
+    """
+    side_effect = _kickoff_side_effect(
+        [_succeed_with("basic findings", "q1"), _succeed_with("advanced findings", "q2")]
+    )
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect
+    ) as mocked_kickoff:
+        basic_result = run_research("teach me about agents", search_depth="basic")
+        advanced_result = run_research("teach me about agents", search_depth="advanced")
+
+    assert mocked_kickoff.call_count == 2
+    assert basic_result.from_cache is False
+    assert advanced_result.from_cache is False
+    assert basic_result.text == "basic findings"
+    assert advanced_result.text == "advanced findings"

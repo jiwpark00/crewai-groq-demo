@@ -16,6 +16,13 @@ def parse_args() -> argparse.Namespace:
         help="Run web research (Tavily) before teaching.",
     )
     parser.add_argument(
+        "--search-depth",
+        choices=["basic", "advanced"],
+        default=None,
+        help="Tavily search depth for --research (defaults to TAVILY_SEARCH_DEPTH setting). "
+        "Advanced costs 2x the Tavily credits of basic.",
+    )
+    parser.add_argument(
         "--output",
         metavar="PATH",
         help="Write the project ideas as markdown to PATH.",
@@ -30,7 +37,7 @@ def main() -> None:
     try:
         research_result = NO_RESEARCH_TEXT
         if args.research:
-            research = run_research(args.prompt)
+            research = run_research(args.prompt, search_depth=args.search_depth)
             search_word = "search" if research.successful_search_count == 1 else "searches"
             print(
                 f"\n=== Researcher's Findings "
@@ -49,7 +56,7 @@ def main() -> None:
                 print("Research cost: $0 (cached)")
             else:
                 research_cost = estimate_groq_cost(research.usage) + estimate_tavily_cost(
-                    research.successful_search_count
+                    research.successful_search_count, research.search_depth
                 )
                 total_cost += research_cost
                 print(f"Research cost: ~${research_cost:.4f}")

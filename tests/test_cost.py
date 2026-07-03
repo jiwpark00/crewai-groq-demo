@@ -21,11 +21,19 @@ def test_estimate_groq_cost_uses_published_pricing() -> None:
 
 
 def test_estimate_tavily_cost_zero_searches() -> None:
-    assert estimate_tavily_cost(0) == 0.0
+    assert estimate_tavily_cost(0, "basic") == 0.0
 
 
 def test_estimate_tavily_cost_scales_linearly_with_search_count() -> None:
-    assert estimate_tavily_cost(3) == 3 * TAVILY_PRICE_PER_CREDIT
+    assert estimate_tavily_cost(3, "basic") == 3 * TAVILY_PRICE_PER_CREDIT
+
+
+def test_estimate_tavily_cost_advanced_search_costs_double_basic() -> None:
+    assert estimate_tavily_cost(1, "advanced") == 2 * estimate_tavily_cost(1, "basic")
+
+
+def test_estimate_tavily_cost_advanced_search_is_two_credits_per_search() -> None:
+    assert estimate_tavily_cost(3, "advanced") == 3 * 2 * TAVILY_PRICE_PER_CREDIT
 
 
 def test_format_groq_cost_flags_untracked_structured_output_calls() -> None:

@@ -1,5 +1,6 @@
 import csv
 import io
+from typing import Literal
 
 import streamlit as st
 
@@ -7,6 +8,7 @@ from crewai_groq_demo.cost import estimate_groq_cost, estimate_tavily_cost, form
 from crewai_groq_demo.crew import NO_RESEARCH_TEXT, run_project, run_research, run_teaching
 from crewai_groq_demo.exceptions import CrewDemoError
 from crewai_groq_demo.models import ProjectIdea
+from crewai_groq_demo.settings import get_settings
 
 st.set_page_config(
     page_title="CrewAI Groq Demo",
@@ -33,6 +35,15 @@ for key in (
 ):
     st.session_state.setdefault(key, None)
 
+search_depth_options: list[Literal["basic", "advanced"]] = ["basic", "advanced"]
+search_depth = st.radio(
+    "Search depth",
+    options=search_depth_options,
+    index=search_depth_options.index(get_settings().tavily_search_depth),
+    horizontal=True,
+    help="Advanced costs 2x the Tavily credits of basic.",
+)
+
 run_research_button = st.button("Run Researcher")
 
 if run_research_button:
@@ -41,7 +52,9 @@ if run_research_button:
     else:
         try:
             with st.spinner("Searching the web..."):
-                st.session_state.research_result = run_research(user_prompt)
+                st.session_state.research_result = run_research(
+                    user_prompt, search_depth=search_depth
+                )
             st.session_state.research_prompt = user_prompt
             st.session_state.teaching_result = None
             st.session_state.project_result = None
@@ -85,7 +98,7 @@ if st.session_state.research_result is not None:
         st.caption("Cost: $0 (served from cache — same prompt was already researched).")
     else:
         research_cost = estimate_groq_cost(research.usage) + estimate_tavily_cost(
-            research.successful_search_count
+            research.successful_search_count, research.search_depth
         )
         st.caption(f"Estimated cost: ~${research_cost:.4f}")
 

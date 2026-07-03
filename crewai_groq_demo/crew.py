@@ -1,5 +1,5 @@
 import time
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 # Temporary workaround for CrewAI + Groq:
 # CrewAI currently adds a `cache_breakpoint` field that Groq rejects.
@@ -28,7 +28,23 @@ class GroqDemoCrew:
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
 
-    def __init__(self) -> None:
+    def __init__(self, search_depth: Literal["basic", "advanced"] | None = None) -> None:
+        # Stashed here (rather than passed as a `researcher()` kwarg) because
+        # CrewBase's metaclass calls `self.researcher()` with *no arguments*
+        # immediately after __init__ returns, to resolve tasks.yaml's
+        # `agent: researcher` string into a real Agent (see _map_task_variables
+        # in crewai/project/crew_base.py). @agent's memoize decorator keys its
+        # cache on the exact args passed, so a call shaped differently from
+        # that internal zero-arg call (e.g. `researcher(search_depth=...)`)
+        # builds a *second*, untracked Agent/tool instance — while the task
+        # actually executes with the first one (CrewAI's sequential executor
+        # uses `task.agent`, not whatever you later pass to `Crew(agents=...)`,
+        # confirmed by reading `crew.py`'s `_get_agent_to_use`). Routing the
+        # override through instance state read by a zero-arg `researcher()`
+        # keeps every call to it args-identical, so it always resolves to the
+        # one real instance CrewAI wires to the task.
+        self._search_depth_override = search_depth
+
         settings = get_settings()
         if not settings.groq_api_key:
             raise MissingAPIKeyError("GROQ_API_KEY")
@@ -55,7 +71,7 @@ class GroqDemoCrew:
 
         search_tool = CountingTavilySearchTool(
             max_results=settings.tavily_max_results,
-            search_depth=settings.tavily_search_depth,
+            search_depth=self._search_depth_override or settings.tavily_search_depth,
         )
         return Agent(
             config=self.agents_config["researcher"],
@@ -168,26 +184,37 @@ class ResearchResult(NamedTuple):
     usage: UsageMetrics
     """Groq token usage summed across all attempts (failed attempts raise before
     CrewAI populates their usage, so this may undercount tokens burned on retries)."""
+    search_depth: Literal["basic", "advanced"]
+    """The Tavily search_depth actually used for these searches (advanced costs
+    2x the credits of basic — see cost.py's estimate_tavily_cost)."""
     from_cache: bool = False
     """True when this result was served from `_research_cache` instead of a
     fresh Tavily/Groq call — callers should treat it as $0 cost."""
 
 
-_research_cache: dict[str, ResearchResult] = {}
+_research_cache: dict[tuple[str, str], ResearchResult] = {}
 
 
-def run_research(user_prompt: str) -> ResearchResult:
+def run_research(
+    user_prompt: str, search_depth: Literal["basic", "advanced"] | None = None
+) -> ResearchResult:
     """Run the researcher agent, retrying on malformed tool calls or rate limits.
 
-    Repeat calls with the same `user_prompt` (within this process) are served
-    from `_research_cache` instead of re-running Tavily/Groq.
+    `search_depth` overrides the `TAVILY_SEARCH_DEPTH` setting for this call
+    (e.g. a per-run UI/CLI choice); omit it to use the configured default.
+
+    Repeat calls with the same `user_prompt` *and* `search_depth` (within this
+    process) are served from `_research_cache` instead of re-running
+    Tavily/Groq — a different depth is treated as a different request.
 
     Builds a fresh agent/crew per attempt so a failed attempt's conversation
     state and search count don't bleed into the retry. Retries back off
     exponentially (2s, 4s) so a rate-limited attempt doesn't immediately
     repeat into another rate limit.
     """
-    cached = _research_cache.get(user_prompt)
+    effective_depth = search_depth or get_settings().tavily_search_depth
+    cache_key = (user_prompt, effective_depth)
+    cached = _research_cache.get(cache_key)
     if cached is not None:
         return cached._replace(from_cache=True)
 
@@ -200,30 +227,37 @@ def run_research(user_prompt: str) -> ResearchResult:
         if attempt > 0:
             time.sleep(2**attempt)
 
-        crew_definition = GroqDemoCrew()
-        researcher_agent = crew_definition.researcher()
+        crew_definition = GroqDemoCrew(search_depth=search_depth)
+        research_task = crew_definition.research_task()
         crew = Crew(
-            agents=[researcher_agent],
-            tasks=[crew_definition.research_task()],
+            agents=[crew_definition.researcher()],
+            tasks=[research_task],
         )
+        # Read the tool from research_task.agent (what CrewAI's sequential
+        # executor actually runs — see _get_agent_to_use in crewai/crew.py),
+        # not from crew_definition.researcher() above. They're the same
+        # memoized instance as long as researcher() is always called with no
+        # arguments (see the __init__ comment), but this is the version
+        # that's true by construction rather than by memoization matching.
+        search_tool = research_task.agent.tools[0]
         try:
             result = crew.kickoff(inputs={"user_prompt": user_prompt})
         except LiteLLMRateLimitError as error:
-            total_search_count += researcher_agent.tools[0].call_count
+            total_search_count += search_tool.call_count
             last_error = error
             continue
         except Exception as error:
-            total_search_count += researcher_agent.tools[0].call_count
+            total_search_count += search_tool.call_count
             if "tool_use_failed" not in str(error):
                 raise
             last_error = error
             continue
 
-        successful_search_count = researcher_agent.tools[0].call_count
+        successful_search_count = search_tool.call_count
         total_search_count += successful_search_count
         if crew.usage_metrics:
             total_usage.add_usage_metrics(crew.usage_metrics)
-        queries = tuple(researcher_agent.tools[0].queries)
+        queries = tuple(search_tool.queries)
         research_result = ResearchResult(
             str(result),
             successful_search_count,
@@ -231,8 +265,9 @@ def run_research(user_prompt: str) -> ResearchResult:
             attempt,
             queries,
             total_usage,
+            search_tool.search_depth,
         )
-        _research_cache[user_prompt] = research_result
+        _research_cache[cache_key] = research_result
         return research_result
 
     if isinstance(last_error, LiteLLMRateLimitError):

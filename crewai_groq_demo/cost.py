@@ -1,3 +1,5 @@
+from typing import Literal
+
 from crewai.types.usage_metrics import UsageMetrics
 
 from crewai_groq_demo.settings import (
@@ -14,8 +16,12 @@ def estimate_groq_cost(usage: UsageMetrics) -> float:
     ) / 1_000_000
 
 
-def estimate_tavily_cost(search_count: int) -> float:
-    return search_count * TAVILY_PRICE_PER_CREDIT
+def estimate_tavily_cost(search_count: int, search_depth: Literal["basic", "advanced"]) -> float:
+    """Advanced search costs 2 Tavily credits per search vs. 1 for basic
+    (confirmed in Tavily's pricing docs: https://docs.tavily.com/documentation/api-credits).
+    """
+    credits_per_search = 1 if search_depth == "basic" else 2
+    return search_count * credits_per_search * TAVILY_PRICE_PER_CREDIT
 
 
 def format_groq_cost(usage: UsageMetrics) -> str:

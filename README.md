@@ -97,11 +97,15 @@ uv run streamlit run app.py
 # CLI — runs teacher + project advisor non-interactively; flags opt into extras
 uv run python main.py "What can I build for real estate agents?"
 uv run python main.py "What can I build for real estate agents?" --research
+uv run python main.py "What can I build for real estate agents?" --research --search-depth advanced
 uv run python main.py "What can I build for real estate agents?" --research --output output.md
 ```
 
-`--research` runs the researcher (Tavily) first; `--output PATH` writes the
-project ideas as markdown to PATH (omit it and nothing is written to disk).
+`--research` runs the researcher (Tavily) first; `--search-depth
+{basic,advanced}` controls Tavily's search depth (advanced costs 2x the
+credits of basic; defaults to the `TAVILY_SEARCH_DEPTH` setting); `--output
+PATH` writes the project ideas as markdown to PATH (omit it and nothing is
+written to disk).
 
 ## Testing
 
@@ -128,7 +132,19 @@ a live LLM in the loop:
 - `crew.py`'s `run_research` retry loop — first-try success, retry-then-
   succeed, retries exhausted, Groq rate-limit handling, the exponential
   backoff between retries, token-usage accumulation, and the same-process
-  research cache
+  research cache (now keyed on `(prompt, search_depth)`)
+- `crew.py`'s `test_researcher_instance_matches_task_resolved_agent` — a
+  genuine (non-mocked) regression test for a real bug caught via live
+  Tavily-dashboard verification: giving `researcher()` a `search_depth`
+  kwarg broke object identity between CrewAI's own internal agent
+  resolution (`GroqDemoCrew.__init__` eagerly resolves `tasks.yaml`'s
+  `agent: researcher` via a zero-arg call, memoized by exact args) and
+  ours, so the instance we inspected for search counts was never actually
+  the one CrewAI executed. Fixed by moving `search_depth` onto
+  `GroqDemoCrew.__init__` so every call to `researcher()` stays args-
+  identical. **The rest of the mocked test suite structurally cannot catch
+  this class of bug** — those tests mock `Crew.kickoff` itself, so they
+  never exercise CrewAI's real task-agent resolution.
 - `crew.py`'s `run_teaching`/`run_project` — usage returned alongside each
   result, `output.md` only written when `output_path` is given, and
   confidence forced to `"low"` when no research was run
@@ -192,7 +208,9 @@ project advisor) typically costs **$0**:
   subject to requests/tokens-per-minute rate limits. Three short calls per
   run (one per agent) stays well within them for occasional use.
 - **Tavily**: the researcher makes at most 2 searches per run (capped in
-  `tasks.yaml`), well within Tavily's free monthly search quota.
+  `tasks.yaml`), well within Tavily's free monthly search quota. `advanced`
+  search depth costs 2 credits/search vs. 1 for `basic` (Tavily's own
+  pricing, not a guess — see `cost.py`); this project defaults to `basic`.
 
 The app estimates real cost per run, using each call's actual Groq token
 usage (`crew.usage_metrics`) and Tavily's per-search pricing — see
@@ -244,6 +262,18 @@ configured with a paid fallback here.
   `mark_cache_breakpoint` to a no-op, working around a CrewAI↔Groq
   incompatibility (Groq rejects a `cache_breakpoint` field CrewAI adds to
   messages). See the comment in `crew.py` before removing it.
+- **CrewAI task-agent resolution gotcha**: `GroqDemoCrew.__init__` eagerly
+  resolves `tasks.yaml`'s `agent: <name>` strings by calling the matching
+  `@agent` method with **zero arguments**, and memoizes by exact call args.
+  Any `@agent` method that takes a parameter (like `researcher`'s
+  `search_depth` used to) must have that parameter come from constructor
+  state instead, read by a zero-arg call — otherwise CrewAI silently builds
+  and executes a *different* instance than the one your own code holds and
+  inspects. Caught live: our own search-count tracking read 0 while
+  Tavily's dashboard showed 2 real searches happened. See the comment on
+  `GroqDemoCrew.__init__` and `run_research`'s `search_tool =
+  research_task.agent.tools[0]` line before adding a parameter to
+  `teacher`/`project_advisor`/`researcher`.
 - **Evidence-grounded ideas**: `project_task` receives the researcher's raw
   findings directly (not just the teacher's paraphrase of them), and must
   cite specific findings by URL per idea rather than reach for general
