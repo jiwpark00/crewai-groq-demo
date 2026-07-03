@@ -47,6 +47,8 @@ when explicitly triggered, and the caller decides what gets passed forward.
 crewai_groq_demo/
   crew.py                 # LLM setup, per-agent Crew runners
   models.py                # Pydantic schema for project ideas
+  settings.py               # Typed, validated env config (pydantic-settings)
+  exceptions.py              # Typed exceptions (MissingAPIKeyError, RateLimitError, ...)
   config/
     agents.yaml            # role/goal/backstory per agent
     tasks.yaml              # description/expected_output per task
@@ -54,6 +56,7 @@ crewai_groq_demo/
     counting_tavily_search_tool.py  # Tavily search wrapper that tracks call count/queries
 main.py                    # CLI entry point
 app.py                     # Streamlit UI entry point
+tests/                      # pytest suite (no live API calls — see Testing)
 ```
 
 ## Setup
@@ -74,7 +77,9 @@ Create a `.env` file in the project root (not committed) with:
 | `GROQ_API_KEY` | teacher, project advisor, researcher LLM calls | [console.groq.com](https://console.groq.com/) |
 | `TAVILY_API_KEY` | researcher's web search tool | [tavily.com](https://tavily.com/) |
 
-Both are required — `crew.py` raises immediately if either is missing.
+Both are required — `crew.py` raises a `MissingAPIKeyError` immediately if
+either is missing, caught in `app.py`/`main.py` and shown as a clean message
+rather than a stack trace.
 
 ### Running
 
@@ -82,6 +87,37 @@ Both are required — `crew.py` raises immediately if either is missing.
 uv run main.py                    # CLI
 uv run streamlit run app.py       # Streamlit UI
 ```
+
+## Testing
+
+```bash
+uv run pytest      # run the test suite
+uv run ruff check . # lint
+uv run mypy crewai_groq_demo    # type-check
+```
+
+The test suite never calls Groq or Tavily — every test that touches
+`run_research`/`run_teaching`/`run_project` mocks `Crew.kickoff` and scripts
+its return value/exception, so tests run in milliseconds, for free, and
+don't need a real `.env`. Coverage so far focuses on what's testable without
+a live LLM in the loop:
+
+- `models.py` — `ProjectIdeaList.to_markdown()` formatting
+- `exceptions.py` — message formatting and attributes on each typed error
+- `settings.py` — env var loading, defaults, and `get_settings()` caching
+- `tools/counting_tavily_search_tool.py` — call-count/query tracking
+- `crew.py`'s `run_research` retry loop — first-try success, retry-then-
+  succeed, retries exhausted, Groq rate-limit handling, and the exponential
+  backoff between retries
+
+`ruff` and `mypy` are configured in `pyproject.toml`
+(`select = ["E", "F", "I", "UP", "B"]` for ruff; fairly strict mypy with a
+scoped `ignore_missing_imports` for `tavily.*`, the only direct dependency
+without inline type stubs). Note: `crew.py` currently has a chunk of
+pre-existing mypy noise from CrewAI's `@CrewBase`/`@agent`/`@task` decorator
+magic (e.g. `self.agents_config["teacher"]` type-checking as indexing a
+plain `str`) — not yet resolved, tracked as a follow-up rather than papered
+over with blanket `# type: ignore`s.
 
 ## Example prompts
 
@@ -145,10 +181,18 @@ configured with a paid fallback here.
   Tavily tool to track exactly how many searches ran and what was searched,
   so the UI can warn you if the researcher used more than one search or
   hallucinated findings without searching at all.
-- **Retry on malformed tool calls**: `run_research` rebuilds the agent/crew
-  from scratch and retries (up to 3 attempts) if Groq's tool-calling output
-  is malformed, without letting a failed attempt's search count or
-  conversation state bleed into the retry.
+- **Retry on malformed tool calls or Groq rate limits**: `run_research`
+  rebuilds the agent/crew from scratch and retries (up to 3 attempts, with
+  exponential backoff) if Groq's tool-calling output is malformed or Groq
+  rate-limits the request, without letting a failed attempt's search count
+  or conversation state bleed into the retry. (Tavily rate limits aren't
+  cleanly catchable here — CrewAI's tool-execution layer swallows them into
+  agent-visible text before they'd reach this code.)
+- **Typed config and errors**: `settings.py` (`pydantic-settings`) replaces
+  scattered `os.getenv()` calls with a validated settings object;
+  `exceptions.py` defines `MissingAPIKeyError`, `RateLimitError`, and
+  `ResearchRetryExhaustedError` so callers handle failures by type instead
+  of pattern-matching error strings.
 - **Groq/CrewAI workaround**: `crew.py` monkey-patches CrewAI's
   `mark_cache_breakpoint` to a no-op, working around a CrewAI↔Groq
   incompatibility (Groq rejects a `cache_breakpoint` field CrewAI adds to
