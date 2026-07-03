@@ -71,6 +71,11 @@ if run_research_button:
             st.session_state.research_prompt = user_prompt
             st.session_state.teaching_result = None
             st.session_state.project_result = None
+            # Market analysis/builder were derived from whatever research
+            # existed before this call — same prompt text doesn't mean same
+            # findings, so they're stale too, not just teaching/project.
+            st.session_state.market_analysis_result = None
+            st.session_state.builder_result = None
         except CrewDemoError as error:
             st.error(str(error))
 
@@ -145,7 +150,10 @@ if run_market_analyst_button:
                     user_prompt, research_for_market_analysis
                 )
             st.session_state.market_analysis_prompt = user_prompt
-            st.session_state.builder_result = None  # downstream stage is now stale
+            # Builder and (transitively, through it) project ideas were
+            # derived from whatever market analysis existed before this call.
+            st.session_state.builder_result = None
+            st.session_state.project_result = None
         except CrewDemoError as error:
             st.error(str(error))
 
@@ -208,6 +216,9 @@ if run_builder_button:
             with st.spinner("Assessing build differentiation..."):
                 st.session_state.builder_result = run_builder(user_prompt, niches_text)
             st.session_state.builder_prompt = user_prompt
+            # Project ideas (if any) were grounded in whatever build
+            # assessment existed before this call.
+            st.session_state.project_result = None
         except CrewDemoError as error:
             st.error(str(error))
 

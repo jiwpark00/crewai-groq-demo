@@ -38,7 +38,7 @@ into it yet.
 
 ## Demo
 
-🚧 Under construction — no screenshots or demo GIF yet.
+![Streamlit UI showing the prompt input and gated Researcher / Market Analyst / Builder / Teacher stage buttons](demo.png)
 
 ## Architecture
 
