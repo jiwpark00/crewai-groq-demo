@@ -7,6 +7,7 @@ import pytest
 from crewai.types.usage_metrics import UsageMetrics
 
 from crewai_groq_demo.crew import (
+    NO_BUILDER_TEXT,
     NO_RESEARCH_TEXT,
     ProjectResult,
     TeachingResult,
@@ -124,7 +125,28 @@ def test_run_project_passes_research_result_to_task_inputs() -> None:
         "user_prompt": "user prompt",
         "teaching_result": "teaching result",
         "research_result": "specific research findings",
+        "builder_result": NO_BUILDER_TEXT,
     }
+
+
+def test_run_project_passes_builder_result_to_task_inputs_when_given() -> None:
+    usage = UsageMetrics()
+    ideas = _sample_ideas()
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff",
+        autospec=True,
+        side_effect=_project_kickoff_returning(ideas, usage),
+    ) as mocked_kickoff:
+        run_project(
+            "user prompt",
+            "teaching result",
+            "specific research findings",
+            builder_result="specific builder assessment",
+        )
+
+    inputs = mocked_kickoff.call_args.kwargs["inputs"]
+    assert inputs["builder_result"] == "specific builder assessment"
 
 
 def test_run_project_forces_low_confidence_when_no_research_was_run() -> None:

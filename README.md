@@ -2,30 +2,39 @@
 
 A project exploring agentic AI with [CrewAI](https://www.crewai.com/), using
 [Groq](https://groq.com/) as the LLM provider to stay on free-tier usage
-instead of paid APIs. It runs a small crew of agents — researcher, teacher,
-and project advisor — that hand results to each other to turn a plain-English
-question into a set of concrete agentic-AI project ideas.
+instead of paid APIs. It runs a small crew of agents that hand results to
+each other to turn a plain-English question into a set of concrete
+agentic-AI project ideas.
 
 ## What it does
 
 You ask a question like *"What can I build with agentic AI as an
-entrepreneur?"* and three agents work through it in sequence:
+entrepreneur?"* and a chain of agents work through it:
 
 1. **Researcher** — searches the web (via Tavily) for current, relevant
    findings and summarizes them with sources.
-2. **Teacher** — explains the agentic-AI concepts relevant to your specific
+2. **Market Analyst** (Streamlit UI only, optional) — screens those findings
+   for specific, underserved niches, actively rejecting broad or saturated
+   candidates. It's correct and expected for this to return 0 niches if
+   nothing clears the bar — the pipeline stops there rather than proceeding.
+3. **Builder** (Streamlit UI only) — assesses how differentiated a build
+   would be from existing agentic-AI solutions, either per-niche (if Market
+   Analyst ran and found any) or for the request as a whole (if it didn't).
+4. **Teacher** — explains the agentic-AI concepts relevant to your specific
    question, grounded in the research.
-3. **Project Advisor** — turns that explanation into a structured list of
+5. **Project Advisor** — turns that explanation into a structured list of
    project ideas, each with a goal, KPI, recommended package, and rationale
    — grounded in the research findings themselves (not just the teacher's
-   paraphrase), with cited evidence, a confidence level, and open validation
-   questions per idea.
+   paraphrase) and, if available, the builder's differentiation assessment
+   — with cited evidence, a confidence level, and open validation questions
+   per idea.
 
 In the Streamlit UI, each stage is gated behind a manual button so you
 decide when to spend an API call rather than the app burning through them
-automatically. The CLI runs non-interactively (see `--research`/`--output`
-below) — research is opt-in per invocation, and the teacher/project-advisor
-calls always run since that's the point of scripting it.
+automatically. The CLI currently only runs the original three-stage
+pipeline (researcher → teacher → project advisor) non-interactively (see
+`--research`/`--output` below) — Market Analyst and Builder aren't wired
+into it yet.
 
 ## Demo
 
@@ -36,18 +45,25 @@ calls always run since that's the point of scripting it.
 ```mermaid
 flowchart LR
     U[User prompt] --> R[Researcher agent<br/>Tavily search]
+    R --> M[Market Analyst agent<br/>optional, screens niches<br/>Streamlit only]
+    M -->|"≥1 niche survives"| B[Builder agent<br/>differentiation assessment<br/>Streamlit only]
+    M -->|"0 niches survive"| S[Pipeline stops here]
+    R -->|"Market Analyst skipped"| B
     R --> T[Teacher agent<br/>explains concepts]
     U --> T
-    T --> P[Project Advisor agent<br/>evidence-grounded project ideas]
+    T --> P[Project Advisor agent<br/>evidence + differentiation-grounded ideas]
     U --> P
     R --> P
+    B --> P
     P --> O[output.md opt-in / CSV download]
 ```
 
 Each agent runs as its own single-task `Crew` (see `run_research`,
-`run_teaching`, `run_project` in
+`run_market_analysis`, `run_builder`, `run_teaching`, `run_project` in
 [crewai_groq_demo/crew.py](crewai_groq_demo/crew.py)), so a stage only runs
 when explicitly triggered, and the caller decides what gets passed forward.
+Market Analyst and Builder are currently wired into the Streamlit UI only —
+see "What it does" above.
 
 ```
 crewai_groq_demo/
@@ -81,7 +97,7 @@ Create a `.env` file in the project root (not committed) with:
 
 | Variable | Used by | Get one at |
 |---|---|---|
-| `GROQ_API_KEY` | teacher, project advisor, researcher LLM calls | [console.groq.com](https://console.groq.com/) |
+| `GROQ_API_KEY` | all agent LLM calls (researcher, market analyst, builder, teacher, project advisor) | [console.groq.com](https://console.groq.com/) |
 | `TAVILY_API_KEY` | researcher's web search tool | [tavily.com](https://tavily.com/) |
 
 Both are required — `crew.py` raises a `MissingAPIKeyError` immediately if
@@ -122,7 +138,8 @@ don't need a real `.env`. Coverage so far focuses on what's testable without
 a live LLM in the loop:
 
 - `models.py` — `ProjectIdeaList.to_markdown()`/`ProjectIdea.to_markdown_block()`
-  formatting, including the evidence/confidence/open-questions fields
+  formatting (evidence/confidence/open-questions), `MarketAnalysis.to_niches_text()`,
+  and `BuildPlan.to_builder_text()`
 - `exceptions.py` — message formatting and attributes on each typed error
 - `settings.py` — env var loading, defaults, and `get_settings()` caching
   (including Tavily's `max_results`/`search_depth`)
@@ -149,8 +166,10 @@ a live LLM in the loop:
   this class of bug** — those tests mock `Crew.kickoff` itself, so they
   never exercise CrewAI's real task-agent resolution.
 - `crew.py`'s `run_teaching`/`run_project` — usage returned alongside each
-  result, `output.md` only written when `output_path` is given, and
-  confidence forced to `"low"` when no research was run
+  result, `output.md` only written when `output_path` is given, confidence
+  forced to `"low"` when no research was run, and `builder_result` passed
+  through to `project_task`'s inputs (defaulting to `NO_BUILDER_TEXT` when
+  Builder didn't run)
 - `structured_output.py`'s `parse_structured_output` — clean JSON, JSON
   wrapped in markdown fences, JSON with surrounding prose, and both
   malformed-JSON and schema-mismatch failures
@@ -206,17 +225,24 @@ in code (`run_project` in `crew.py`), not left to the model to self-report.
 
 The Streamlit UI renders each idea as a card (with evidence/open-questions
 in expanders) and also offers a CSV download; the CLI prints the same to
-stdout and writes it to disk only if you pass `--output PATH`.
+stdout and writes it to disk only if you pass `--output PATH`. The
+Streamlit UI also renders Market Analyst's niches and Builder's
+differentiation assessments as their own cards, each with a per-stage cost
+caption, between the researcher and teacher sections.
 
 ## Cost estimate per run
 
-Both providers have usable free tiers, so a full run (research + teacher +
-project advisor) typically costs **$0**:
+Both providers have usable free tiers, so a full run typically costs **$0**
+— three calls (research + teacher + project advisor) via the CLI, or up to
+five in the Streamlit UI if you opt into Market Analyst and Builder too:
 
 - **Groq**: `openai/gpt-oss-120b` is available on Groq's free tier, subject
-  to requests/tokens-per-minute rate limits. Three short calls per run (one
-  per agent) stays well within them for occasional use. This is the second
-  model tried here — see "Model history" below for what didn't work and why.
+  to a fairly tight 8K-tokens-per-minute burst limit — running all five
+  Streamlit stages back-to-back with no pause between clicks can hit it
+  (confirmed live; the app catches this as `RateLimitError` and shows a
+  clean message rather than crashing). Space clicks out by ~15-20s if you
+  hit it. This is the second model tried here — see "Model history" below
+  for what didn't work and why.
 - **Tavily**: the researcher makes at most 2 searches per run (capped in
   `tasks.yaml`), well within Tavily's free monthly search quota. `advanced`
   search depth costs 2 credits/search vs. 1 for `basic` (Tavily's own
@@ -299,6 +325,13 @@ configured with a paid fallback here.
   `mark_cache_breakpoint` to a no-op, working around a CrewAI↔Groq
   incompatibility (Groq rejects a `cache_breakpoint` field CrewAI adds to
   messages). See the comment in `crew.py` before removing it.
+- **Market Analyst → Builder gating (Streamlit only)**: Market Analyst is
+  optional and actively screens niches — it's correct for it to return zero.
+  `app.py` enforces the "stops here" rule from that outcome: if Market
+  Analyst ran and found nothing, clicking "Run Builder" shows an info
+  message instead of spending a Groq call on niches that didn't survive
+  screening. If Market Analyst was skipped (or is stale for the current
+  prompt) entirely, Builder falls back to general knowledge as normal.
 - **CrewAI task-agent resolution gotcha**: `GroqDemoCrew.__init__` eagerly
   resolves `tasks.yaml`'s `agent: <name>` strings by calling the matching
   `@agent` method with **zero arguments**, and memoizes by exact call args.

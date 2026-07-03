@@ -112,3 +112,25 @@ class BuildAssessment(BaseModel):
 
 class BuildPlan(BaseModel):
     assessments: list[BuildAssessment]
+
+    def to_builder_text(self) -> str:
+        """Compact text representation for feeding into the project advisor's
+        prompt — carries each assessment's differentiation call and rationale
+        forward so ideas can be grounded in it rather than re-deriving it."""
+        blocks = []
+        for i, assessment in enumerate(self.assessments, start=1):
+            requirements = (
+                "; ".join(assessment.key_requirements)
+                if assessment.key_requirements
+                else "(none)"
+            )
+            risks = "; ".join(assessment.risks) if assessment.risks else "(none)"
+            blocks.append(
+                f"{i}. Niche: {assessment.niche}\n"
+                f"   Differentiation: {assessment.differentiation} — "
+                f"{assessment.differentiation_rationale}\n"
+                f"   Recommended package: {assessment.recommended_package}\n"
+                f"   Key requirements: {requirements}\n"
+                f"   Risks: {risks}"
+            )
+        return "\n\n".join(blocks)

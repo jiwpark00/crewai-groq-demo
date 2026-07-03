@@ -183,15 +183,24 @@ class ProjectResult(NamedTuple):
     usage: UsageMetrics
 
 
+NO_BUILDER_TEXT = "(no builder assessment was run)"
+"""Sentinel passed as `builder_result` when the builder stage was skipped —
+mirrors NO_RESEARCH_TEXT/NO_MARKET_ANALYSIS_TEXT so project_task's shared
+prompt template can signal "nothing to ground this in" consistently.
+"""
+
+
 def run_project(
     user_prompt: str,
     teaching_result: str,
     research_result: str,
+    builder_result: str = NO_BUILDER_TEXT,
     output_path: str | None = None,
 ) -> ProjectResult:
-    """Run the project advisor using the teacher's explanation and the raw
-    research findings as input, so ideas can cite specific findings/URLs
-    rather than whatever survived into the teacher's paraphrased summary.
+    """Run the project advisor using the teacher's explanation, the raw
+    research findings, and (optionally) the builder's differentiation
+    assessment as input, so ideas can cite specific findings/URLs and avoid
+    duplicating what the builder already flagged as commoditized.
 
     Only writes markdown to `output_path` when one is given — callers running
     in a server/UI context (Streamlit) shouldn't write files to disk on every run.
@@ -207,6 +216,7 @@ def run_project(
             "user_prompt": user_prompt,
             "teaching_result": teaching_result,
             "research_result": research_result,
+            "builder_result": builder_result,
         },
         ProjectIdeaList,
         task_name="project_task",

@@ -41,6 +41,11 @@ project_task:
     {research_result}
     ---
 
+    A builder agent's differentiation assessment (if one was run):
+    ---
+    {builder_result}
+    ---
+
     Using the explanation above, suggest concrete project or use-case ideas that
     match what the user actually asked for — their stated audience, domain,
     and requested count (default to 3 if no count was specified). Ground
@@ -67,6 +72,12 @@ project_task:
       "low" if speculative or if no research was run.
     - open_questions: concrete questions someone would need to answer before
       committing to build this, given what's still unknown.
+
+    If the builder's assessment above is not "(no builder assessment was
+    run)", use it: prefer package recommendations it made, avoid proposing
+    an idea it flagged "low" differentiation for unless you can meaningfully
+    differentiate it further, and let its listed risks inform your open
+    questions rather than duplicating generic risks.
 
     Respond with ONLY a single valid JSON object — no markdown code fences,
     no commentary before or after — matching exactly this shape:

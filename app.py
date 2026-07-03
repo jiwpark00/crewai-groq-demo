@@ -5,7 +5,16 @@ from typing import Literal
 import streamlit as st
 
 from crewai_groq_demo.cost import estimate_groq_cost, estimate_tavily_cost, format_groq_cost
-from crewai_groq_demo.crew import NO_RESEARCH_TEXT, run_project, run_research, run_teaching
+from crewai_groq_demo.crew import (
+    NO_BUILDER_TEXT,
+    NO_MARKET_ANALYSIS_TEXT,
+    NO_RESEARCH_TEXT,
+    run_builder,
+    run_market_analysis,
+    run_project,
+    run_research,
+    run_teaching,
+)
 from crewai_groq_demo.exceptions import CrewDemoError
 from crewai_groq_demo.models import ProjectIdea
 from crewai_groq_demo.settings import get_settings
@@ -32,6 +41,10 @@ for key in (
     "research_result",
     "research_prompt",
     "research_for_project",
+    "market_analysis_result",
+    "market_analysis_prompt",
+    "builder_result",
+    "builder_prompt",
 ):
     st.session_state.setdefault(key, None)
 
@@ -110,6 +123,124 @@ if st.session_state.research_result is not None:
             "or the teacher will proceed without it."
         )
 
+st.markdown("---")
+st.markdown("### Market Analyst (optional)")
+st.caption(
+    "Screens the research findings above for specific, underserved niches — "
+    "it's correct and expected for this to return 0 niches if nothing clears "
+    "the bar. Skip this to let Builder reason from general knowledge instead."
+)
+run_market_analyst_button = st.button("Run Market Analyst")
+
+if run_market_analyst_button:
+    if not user_prompt.strip():
+        st.warning("Please enter a prompt first.")
+    else:
+        research_for_market_analysis = (
+            st.session_state.research_result.text if research_is_current else NO_RESEARCH_TEXT
+        )
+        try:
+            with st.spinner("Analyzing the market..."):
+                st.session_state.market_analysis_result = run_market_analysis(
+                    user_prompt, research_for_market_analysis
+                )
+            st.session_state.market_analysis_prompt = user_prompt
+            st.session_state.builder_result = None  # downstream stage is now stale
+        except CrewDemoError as error:
+            st.error(str(error))
+
+market_analysis_is_current = st.session_state.market_analysis_prompt == user_prompt
+
+if st.session_state.market_analysis_result is not None:
+    analysis = st.session_state.market_analysis_result.analysis
+    if analysis.niches:
+        for niche in analysis.niches:
+            with st.container(border=True):
+                st.markdown(f"**{niche.niche}**")
+                st.markdown(f"*Audience:* {niche.audience}")
+                if niche.evidence:
+                    with st.expander(f"Evidence ({len(niche.evidence)})"):
+                        for item in niche.evidence:
+                            st.markdown(f"- {item}")
+    else:
+        st.info(
+            "No niches survived screening for this prompt — nothing here cleared the bar."
+        )
+    st.caption(format_groq_cost(st.session_state.market_analysis_result.usage))
+    if not market_analysis_is_current:
+        st.warning(
+            "This market analysis was run for a different prompt. Re-run it, "
+            "or Builder will proceed without it."
+        )
+
+st.markdown("---")
+st.markdown("### Builder")
+st.caption(
+    "Assesses how differentiated a build would be from what already exists. "
+    "Uses the market analyst's niches above if current, otherwise falls back "
+    "to general knowledge about your request as a whole."
+)
+run_builder_button = st.button("Run Builder")
+
+if run_builder_button:
+    if not user_prompt.strip():
+        st.warning("Please enter a prompt first.")
+    elif (
+        st.session_state.market_analysis_result is not None
+        and market_analysis_is_current
+        and not st.session_state.market_analysis_result.analysis.niches
+    ):
+        st.info(
+            "Market analysis found nothing worth pursuing for this prompt, so "
+            "the pipeline stops here rather than having Builder guess at "
+            "niches that didn't survive screening. Try a different prompt, or "
+            "skip Market Analyst entirely to let Builder reason from general "
+            "knowledge instead."
+        )
+    else:
+        niches_text = (
+            st.session_state.market_analysis_result.analysis.to_niches_text()
+            if st.session_state.market_analysis_result is not None
+            and market_analysis_is_current
+            else NO_MARKET_ANALYSIS_TEXT
+        )
+        try:
+            with st.spinner("Assessing build differentiation..."):
+                st.session_state.builder_result = run_builder(user_prompt, niches_text)
+            st.session_state.builder_prompt = user_prompt
+        except CrewDemoError as error:
+            st.error(str(error))
+
+builder_is_current = st.session_state.builder_prompt == user_prompt
+
+if st.session_state.builder_result is not None:
+    plan = st.session_state.builder_result.plan
+    diff_badge = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+    for assessment in plan.assessments:
+        with st.container(border=True):
+            st.markdown(f"**{assessment.niche}**")
+            st.markdown(
+                f"**Differentiation:** {diff_badge[assessment.differentiation]} "
+                f"{assessment.differentiation}"
+            )
+            st.markdown(assessment.differentiation_rationale)
+            st.markdown(f"**Recommended package:** {assessment.recommended_package}")
+            if assessment.key_requirements:
+                with st.expander(f"Key requirements ({len(assessment.key_requirements)})"):
+                    for item in assessment.key_requirements:
+                        st.markdown(f"- {item}")
+            if assessment.risks:
+                with st.expander(f"Risks ({len(assessment.risks)})"):
+                    for item in assessment.risks:
+                        st.markdown(f"- {item}")
+    st.caption(format_groq_cost(st.session_state.builder_result.usage))
+    if not builder_is_current:
+        st.warning(
+            "This build assessment was run for a different prompt. Re-run it, "
+            "or the project advisor will proceed without it."
+        )
+
+st.markdown("---")
 run_teacher_button = st.button("Run Teacher")
 
 if run_teacher_button:
@@ -140,13 +271,26 @@ if st.session_state.teaching_result:
 
     st.info("Review the explanation above before spending another Groq call on project ideas.")
 
+    builder_available = st.session_state.builder_result is not None and builder_is_current
+    if builder_available:
+        st.caption("Project ideas will be grounded in the build assessment above.")
+    else:
+        st.caption(
+            "No current build assessment — project ideas will be generated without it. "
+            "Run Builder above first if you want ideas grounded in its differentiation call."
+        )
+
     if st.button("Continue to Project Ideas"):
+        builder_result_for_project = (
+            st.session_state.builder_result.plan.to_builder_text() if builder_available else ""
+        ) or NO_BUILDER_TEXT
         try:
             with st.spinner("Running project advisor..."):
                 st.session_state.project_result = run_project(
                     st.session_state.gated_prompt,
                     st.session_state.teaching_result.text,
                     st.session_state.research_for_project,
+                    builder_result=builder_result_for_project,
                 )
         except CrewDemoError as error:
             st.error(str(error))

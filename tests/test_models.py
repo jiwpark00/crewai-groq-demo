@@ -1,4 +1,11 @@
-from crewai_groq_demo.models import MarketAnalysis, MarketNiche, ProjectIdea, ProjectIdeaList
+from crewai_groq_demo.models import (
+    BuildAssessment,
+    BuildPlan,
+    MarketAnalysis,
+    MarketNiche,
+    ProjectIdea,
+    ProjectIdeaList,
+)
 
 
 def _make_idea(name: str = "Idea One", **overrides: object) -> ProjectIdea:
@@ -93,3 +100,43 @@ def test_market_analysis_to_niches_text_empty() -> None:
     analysis = MarketAnalysis(niches=[])
 
     assert analysis.to_niches_text() == ""
+
+
+def test_build_plan_to_builder_text_includes_all_fields() -> None:
+    plan = BuildPlan(
+        assessments=[
+            BuildAssessment(
+                niche="First niche",
+                differentiation="high",
+                differentiation_rationale="Nothing else does this",
+                recommended_package="CrewAI",
+                key_requirements=["A scraper", "An LLM"],
+                risks=["Legal risk"],
+            ),
+            BuildAssessment(
+                niche="Second niche",
+                differentiation="low",
+                differentiation_rationale="Already commoditized",
+                recommended_package="LangGraph",
+                key_requirements=[],
+                risks=[],
+            ),
+        ]
+    )
+
+    text = plan.to_builder_text()
+
+    assert "1. Niche: First niche" in text
+    assert "Differentiation: high — Nothing else does this" in text
+    assert "Recommended package: CrewAI" in text
+    assert "Key requirements: A scraper; An LLM" in text
+    assert "Risks: Legal risk" in text
+    assert "2. Niche: Second niche" in text
+    assert "Key requirements: (none)" in text
+    assert "Risks: (none)" in text
+
+
+def test_build_plan_to_builder_text_empty() -> None:
+    plan = BuildPlan(assessments=[])
+
+    assert plan.to_builder_text() == ""
