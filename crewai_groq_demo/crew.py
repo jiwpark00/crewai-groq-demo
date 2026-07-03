@@ -16,7 +16,7 @@ from crewai_groq_demo.exceptions import (
     RateLimitError,
     ResearchRetryExhaustedError,
 )
-from crewai_groq_demo.models import ProjectIdeaList
+from crewai_groq_demo.models import MarketAnalysis, ProjectIdeaList
 from crewai_groq_demo.settings import get_settings
 from crewai_groq_demo.tools.counting_tavily_search_tool import CountingTavilySearchTool
 
@@ -64,6 +64,10 @@ class GroqDemoCrew:
         return Agent(config=self.agents_config["project_advisor"], llm=self.llm)
 
     @agent
+    def market_analyst(self) -> Agent:
+        return Agent(config=self.agents_config["market_analyst"], llm=self.llm)
+
+    @agent
     def researcher(self) -> Agent:
         settings = get_settings()
         if not settings.tavily_api_key:
@@ -91,6 +95,12 @@ class GroqDemoCrew:
     @task
     def research_task(self) -> Task:
         return Task(config=self.tasks_config["research_task"])
+
+    @task
+    def market_analysis_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["market_analysis_task"], output_pydantic=MarketAnalysis
+        )
 
 
 class TeachingResult(NamedTuple):
@@ -273,3 +283,37 @@ def run_research(
     if isinstance(last_error, LiteLLMRateLimitError):
         raise RateLimitError(provider="groq") from last_error
     raise ResearchRetryExhaustedError(attempts=max_attempts) from last_error
+
+
+class MarketAnalysisResult(NamedTuple):
+    analysis: MarketAnalysis
+    usage: UsageMetrics
+
+
+def run_market_analysis(user_prompt: str, research_result: str) -> MarketAnalysisResult:
+    """Run the market analyst using the researcher's raw findings directly —
+    not the teacher's explanation. The market analyst's job is to spot niches
+    in what was actually found, not to re-derive them from a paraphrase (same
+    reasoning as project_task: paraphrasing loses the specific findings/URLs
+    needed to ground each niche).
+    """
+    crew_definition = GroqDemoCrew()
+    crew = Crew(
+        agents=[crew_definition.market_analyst()],
+        tasks=[crew_definition.market_analysis_task()],
+    )
+    try:
+        result = crew.kickoff(
+            inputs={"user_prompt": user_prompt, "research_result": research_result}
+        )
+    except LiteLLMRateLimitError as error:
+        raise RateLimitError(provider="groq") from error
+    analysis: MarketAnalysis = result.pydantic
+
+    if research_result.strip() == NO_RESEARCH_TEXT:
+        # Same reasoning as run_project's confidence-forcing: don't trust the
+        # model to self-report an empty list when there's nothing to ground
+        # a niche in — enforce it rather than risk fabricated-looking niches.
+        analysis.niches = []
+
+    return MarketAnalysisResult(analysis, crew.usage_metrics or UsageMetrics())

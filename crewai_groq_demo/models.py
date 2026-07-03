@@ -59,3 +59,19 @@ class ProjectIdeaList(BaseModel):
 
     def to_markdown(self) -> str:
         return "\n".join(idea.to_markdown_block() for idea in self.ideas)
+
+
+class MarketNiche(BaseModel):
+    niche: str = Field(
+        description="A specific, narrow niche or pain point — not a broad market category"
+    )
+    audience: str = Field(description="Who specifically experiences this pain point")
+    evidence: list[str] = Field(
+        default_factory=list,
+        description="Research findings (each citing its source URL) that surfaced this "
+        "niche; empty if no research was run",
+    )
+
+
+class MarketAnalysis(BaseModel):
+    niches: list[MarketNiche]

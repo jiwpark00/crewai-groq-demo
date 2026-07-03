@@ -87,3 +87,47 @@ research_task:
   expected_output: >
     3-5 bullet points of current findings with source URLs.
   agent: researcher
+
+market_analysis_task:
+  description: >
+    The user asked: "{user_prompt}"
+
+    Recent web research on this topic:
+    ---
+    {research_result}
+    ---
+
+    Identify 2-3 specific, underserved niches or pain points that agentic AI
+    could realistically address, using the research above as raw material —
+    not as a list to summarize. A niche must name a specific, recurring task
+    or workflow moment, narrow enough to build a single focused product
+    around.
+
+    Do NOT restate a finding as a niche. If a finding says "agentic AI can
+    automate workflows and scale personalization," do not write a niche
+    called "marketers needing to automate workflows and scale
+    personalization" — that just repeats the finding's own words back
+    (reusing 3+ consecutive words from a finding is a sign you're doing
+    this — rewrite it to describe the underlying task instead). Read
+    between the findings for the underlying, specific problem they imply.
+
+    Purely to illustrate the LEVEL OF SPECIFICITY required (this example is
+    from an unrelated domain — never reuse it or adapt it, your niches must
+    come from the actual findings above): bad, too broad, restates a
+    finding — "warehouse managers struggling to track inventory." Good,
+    specific, names a recurring task — "night-shift warehouse pickers
+    manually re-scanning mis-shelved SKUs three times per shift because the
+    barcode system doesn't flag aisle mismatches."
+
+    For each niche, name who specifically experiences this pain point, and
+    cite the research finding (with its URL) that inspired it — the
+    citation should inspire the niche, not be restated as the niche. If the
+    research above literally says "(no research was run)", return an empty
+    list — never invent or paraphrase findings that weren't actually
+    looked up.
+  expected_output: >
+    A list of 2-3 specific niches, each naming a recurring task/workflow
+    pain point (not a restated finding or broad category), who experiences
+    it, and the research finding (with URL) that inspired it — or an empty
+    list if no research was run.
+  agent: market_analyst
