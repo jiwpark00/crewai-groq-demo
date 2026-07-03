@@ -1,6 +1,5 @@
-from pydantic import Field
-
 from crewai_tools import TavilySearchTool
+from pydantic import Field
 
 
 class CountingTavilySearchTool(TavilySearchTool):

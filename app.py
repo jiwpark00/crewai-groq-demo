@@ -2,7 +2,9 @@ import csv
 import io
 
 import streamlit as st
-from crewai_groq_demo.crew import run_project, run_teaching, run_research
+
+from crewai_groq_demo.crew import run_project, run_research, run_teaching
+from crewai_groq_demo.exceptions import CrewDemoError
 
 st.set_page_config(
     page_title="CrewAI Groq Demo",
@@ -34,11 +36,14 @@ if run_research_button:
     if not user_prompt.strip():
         st.warning("Please enter a prompt first.")
     else:
-        with st.spinner("Searching the web..."):
-            st.session_state.research_result = run_research(user_prompt)
-        st.session_state.research_prompt = user_prompt
-        st.session_state.teaching_result = None
-        st.session_state.project_result = None
+        try:
+            with st.spinner("Searching the web..."):
+                st.session_state.research_result = run_research(user_prompt)
+            st.session_state.research_prompt = user_prompt
+            st.session_state.teaching_result = None
+            st.session_state.project_result = None
+        except CrewDemoError as error:
+            st.error(str(error))
 
 research_is_current = st.session_state.research_prompt == user_prompt
 
@@ -92,10 +97,15 @@ if run_teacher_button:
             if research_is_current
             else "(no research was run for this prompt)"
         )
-        with st.spinner("Running teaching agent..."):
-            st.session_state.teaching_result = run_teaching(user_prompt, research_for_teacher)
-        st.session_state.gated_prompt = user_prompt
-        st.session_state.project_result = None
+        try:
+            with st.spinner("Running teaching agent..."):
+                st.session_state.teaching_result = run_teaching(
+                    user_prompt, research_for_teacher
+                )
+            st.session_state.gated_prompt = user_prompt
+            st.session_state.project_result = None
+        except CrewDemoError as error:
+            st.error(str(error))
 
 if st.session_state.teaching_result:
     st.markdown("## Teacher's Explanation")
@@ -104,10 +114,13 @@ if st.session_state.teaching_result:
     st.info("Review the explanation above before spending another Groq call on project ideas.")
 
     if st.button("Continue to Project Ideas"):
-        with st.spinner("Running project advisor..."):
-            st.session_state.project_result = run_project(
-                st.session_state.gated_prompt, st.session_state.teaching_result
-            )
+        try:
+            with st.spinner("Running project advisor..."):
+                st.session_state.project_result = run_project(
+                    st.session_state.gated_prompt, st.session_state.teaching_result
+                )
+        except CrewDemoError as error:
+            st.error(str(error))
 
 if st.session_state.project_result:
     st.markdown("## Project Ideas")
