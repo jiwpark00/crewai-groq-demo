@@ -1,3 +1,6 @@
+import csv
+import io
+
 import streamlit as st
 from crewai_groq_demo.crew import run_project, run_teaching, run_research
 
@@ -95,11 +98,33 @@ if st.session_state.teaching_result:
 
 if st.session_state.project_result:
     st.markdown("## Project Ideas")
-    st.markdown(st.session_state.project_result)
+    project_ideas = st.session_state.project_result
+
+    for idea in project_ideas.ideas:
+        with st.container(border=True):
+            st.subheader(idea.name)
+            st.markdown(f"**Goal:** {idea.goal}")
+            st.markdown(f"**KPI:** {idea.kpi}")
+            st.markdown(f"**Package:** {idea.package}")
+            st.markdown(f"**Why this package:** {idea.rationale}")
+
+    with st.expander("View as table"):
+        st.dataframe(
+            [idea.model_dump() for idea in project_ideas.ideas],
+            use_container_width=True,
+        )
+
+    csv_buffer = io.StringIO()
+    writer = csv.DictWriter(
+        csv_buffer, fieldnames=["name", "goal", "kpi", "package", "rationale"]
+    )
+    writer.writeheader()
+    for idea in project_ideas.ideas:
+        writer.writerow(idea.model_dump())
 
     st.download_button(
-        label="Download output.md",
-        data=st.session_state.project_result,
-        file_name="output.md",
-        mime="text/markdown",
+        label="Download ideas.csv",
+        data=csv_buffer.getvalue(),
+        file_name="project_ideas.csv",
+        mime="text/csv",
     )

@@ -4,6 +4,7 @@ from crewai import Agent, Crew, LLM, Task
 from crewai.project import CrewBase, agent, task
 from dotenv import load_dotenv
 
+from crewai_groq_demo.models import ProjectIdeaList
 from crewai_groq_demo.tools.counting_tavily_search_tool import CountingTavilySearchTool
 
 # Temporary workaround for CrewAI + Groq:
@@ -58,7 +59,7 @@ class GroqDemoCrew:
 
     @task
     def project_task(self) -> Task:
-        return Task(config=self.tasks_config["project_task"])
+        return Task(config=self.tasks_config["project_task"], output_pydantic=ProjectIdeaList)
 
     @task
     def research_task(self) -> Task:
@@ -76,7 +77,7 @@ def run_teaching(user_prompt: str, research_result: str) -> str:
     return str(result)
 
 
-def run_project(user_prompt: str, teaching_result: str) -> str:
+def run_project(user_prompt: str, teaching_result: str) -> ProjectIdeaList:
     """Run the project advisor using the teacher's explanation as input."""
     crew_definition = GroqDemoCrew()
     crew = Crew(
@@ -86,12 +87,12 @@ def run_project(user_prompt: str, teaching_result: str) -> str:
     result = crew.kickoff(
         inputs={"user_prompt": user_prompt, "teaching_result": teaching_result}
     )
-    result_text = str(result)
+    project_ideas: ProjectIdeaList = result.pydantic
 
     with open("output.md", "w", encoding="utf-8") as file:
-        file.write(result_text)
+        file.write(project_ideas.to_markdown())
 
-    return result_text
+    return project_ideas
 
 
 def run_research(user_prompt: str) -> tuple[str, int]:

@@ -43,14 +43,15 @@ project_task:
     than reaching for generic/stock ideas (e.g. "a customer support bot")
     unless they are genuinely the best fit.
 
-    For each idea, give: the goal, a KPI, a recommended package (CrewAI,
-    LangGraph, Google ADK, AutoGen, etc.), and one sentence on why that
-    package fits. Keep each idea to 2-4 sentences (roughly 60-80 words) —
-    do not pad with extra background or caveats.
+    For each idea, give: a short name, the goal, a KPI, a recommended
+    package (CrewAI, LangGraph, Google ADK, AutoGen, etc.), and one sentence
+    on why that package fits. Keep the goal/KPI/rationale fields concise
+    (roughly 1-2 sentences each) — do not pad with extra background or
+    caveats.
   expected_output: >
     A list of project/use-case ideas tailored to the user's specific
-    audience, domain, and requested count, each with a goal, KPI, and
-    recommended package — each idea 2-4 sentences long.
+    audience, domain, and requested count, each with a name, goal, KPI,
+    and recommended package.
   agent: project_advisor
 
 research_task:

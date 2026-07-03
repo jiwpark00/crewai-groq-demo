@@ -25,6 +25,6 @@ proceed = input(
 if proceed == "y":
     project_result = run_project(user_prompt, teaching_result)
     print("\n=== Project Ideas ===")
-    print(project_result)
+    print(project_result.to_markdown())
 else:
     print("Stopped before running the project advisor.")
