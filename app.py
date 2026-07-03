@@ -25,7 +25,6 @@ for key in (
     "gated_prompt",
     "research_result",
     "research_prompt",
-    "research_search_count",
 ):
     st.session_state.setdefault(key, None)
 
@@ -36,29 +35,43 @@ if run_research_button:
         st.warning("Please enter a prompt first.")
     else:
         with st.spinner("Searching the web..."):
-            st.session_state.research_result, st.session_state.research_search_count = run_research(
-                user_prompt
-            )
+            st.session_state.research_result = run_research(user_prompt)
         st.session_state.research_prompt = user_prompt
         st.session_state.teaching_result = None
         st.session_state.project_result = None
 
 research_is_current = st.session_state.research_prompt == user_prompt
 
-if st.session_state.research_result:
+if st.session_state.research_result is not None:
+    research = st.session_state.research_result
     st.markdown("## Researcher's Findings")
-    st.markdown(st.session_state.research_result)
+    st.markdown(research.text)
 
-    search_count = st.session_state.research_search_count
-    search_word = "search" if search_count == 1 else "searches"
-    if search_count == 0:
+    search_word = "search" if research.successful_search_count == 1 else "searches"
+    if research.successful_search_count == 0:
         st.error(
             "Ran 0 searches — these findings were not actually looked up and may be hallucinated."
         )
-    elif search_count > 1:
-        st.warning(f"⚠️ Ran {search_count} {search_word} for this request, not just one.")
+    elif research.successful_search_count > 1:
+        st.warning(
+            f"⚠️ Ran {research.successful_search_count} {search_word} for this "
+            "request, not just one."
+        )
     else:
-        st.caption(f"Ran {search_count} {search_word} for this request.")
+        st.caption(f"Ran {research.successful_search_count} {search_word} for this request.")
+
+    if research.queries:
+        with st.expander("View search queries used"):
+            for i, query in enumerate(research.queries, start=1):
+                st.markdown(f"{i}. `{query}`")
+
+    if research.retries > 0:
+        discarded_searches = research.total_search_count - research.successful_search_count
+        st.warning(
+            f"Needed {research.retries} retry(ies) after malformed tool calls — "
+            f"{research.total_search_count} total searches were made across all attempts "
+            f"({discarded_searches} on discarded attempts)."
+        )
 
     if research_is_current:
         st.info("Review the sources above before spending a Groq call on the teacher.")
@@ -75,7 +88,7 @@ if run_teacher_button:
         st.warning("Please enter a prompt first.")
     else:
         research_for_teacher = (
-            st.session_state.research_result
+            st.session_state.research_result.text
             if research_is_current
             else "(no research was run for this prompt)"
         )

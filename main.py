@@ -7,10 +7,18 @@ run_research_choice = input(
 ).strip().lower()
 
 if run_research_choice == "y":
-    research_result, search_count = run_research(user_prompt)
-    search_word = "search" if search_count == 1 else "searches"
-    print(f"\n=== Researcher's Findings ({search_count} {search_word}) ===")
-    print(research_result)
+    research = run_research(user_prompt)
+    search_word = "search" if research.successful_search_count == 1 else "searches"
+    print(f"\n=== Researcher's Findings ({research.successful_search_count} {search_word}) ===")
+    for i, query in enumerate(research.queries, start=1):
+        print(f"  {i}. {query}")
+    if research.retries > 0:
+        print(
+            f"(needed {research.retries} retry(ies) after malformed tool calls — "
+            f"{research.total_search_count} total searches across all attempts)"
+        )
+    print(research.text)
+    research_result = research.text
 else:
     research_result = "(no research was run)"
 

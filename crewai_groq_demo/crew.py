@@ -1,4 +1,5 @@
 import os
+from typing import NamedTuple
 
 from crewai import Agent, Crew, LLM, Task
 from crewai.project import CrewBase, agent, task
@@ -30,6 +31,7 @@ class GroqDemoCrew:
         self.llm = LLM(
             model="groq/llama-3.3-70b-versatile",
             api_key=groq_api_key,
+            temperature=0.2,
         )
 
     @agent
@@ -95,14 +97,48 @@ def run_project(user_prompt: str, teaching_result: str) -> ProjectIdeaList:
     return project_ideas
 
 
-def run_research(user_prompt: str) -> tuple[str, int]:
-    """Run only the researcher agent and return its findings and search call count."""
-    crew_definition = GroqDemoCrew()
-    researcher_agent = crew_definition.researcher()
-    crew = Crew(
-        agents=[researcher_agent],
-        tasks=[crew_definition.research_task()],
-    )
-    result = crew.kickoff(inputs={"user_prompt": user_prompt})
-    search_tool = researcher_agent.tools[0]
-    return str(result), search_tool.call_count
+class ResearchResult(NamedTuple):
+    text: str
+    successful_search_count: int
+    """Searches made by the attempt whose result is actually returned."""
+    total_search_count: int
+    """Searches made across all attempts, including failed/discarded retries."""
+    retries: int
+    """Number of failed attempts before the one that succeeded."""
+    queries: tuple[str, ...]
+    """The actual search queries used by the successful attempt, in order."""
+
+
+def run_research(user_prompt: str) -> ResearchResult:
+    """Run the researcher agent, retrying on malformed tool calls.
+
+    Builds a fresh agent/crew per attempt so a failed attempt's conversation
+    state and search count don't bleed into the retry.
+    """
+    total_search_count = 0
+    last_error: Exception | None = None
+
+    for attempt in range(3):
+        crew_definition = GroqDemoCrew()
+        researcher_agent = crew_definition.researcher()
+        crew = Crew(
+            agents=[researcher_agent],
+            tasks=[crew_definition.research_task()],
+        )
+        try:
+            result = crew.kickoff(inputs={"user_prompt": user_prompt})
+        except Exception as error:
+            total_search_count += researcher_agent.tools[0].call_count
+            if "tool_use_failed" not in str(error):
+                raise
+            last_error = error
+            continue
+
+        successful_search_count = researcher_agent.tools[0].call_count
+        total_search_count += successful_search_count
+        queries = tuple(researcher_agent.tools[0].queries)
+        return ResearchResult(
+            str(result), successful_search_count, total_search_count, attempt, queries
+        )
+
+    raise RuntimeError("Researcher failed tool calling 3 times in a row.") from last_error
