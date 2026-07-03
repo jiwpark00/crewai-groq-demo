@@ -1,4 +1,4 @@
-from crewai_groq_demo.models import ProjectIdea, ProjectIdeaList
+from crewai_groq_demo.models import MarketAnalysis, MarketNiche, ProjectIdea, ProjectIdeaList
 
 
 def _make_idea(name: str = "Idea One", **overrides: object) -> ProjectIdea:
@@ -66,3 +66,30 @@ def test_to_markdown_no_evidence_or_open_questions() -> None:
 
     assert "- **Evidence:** none — no research was run for this idea\n" in markdown
     assert "Open questions" not in markdown
+
+
+def test_market_analysis_to_niches_text_includes_niche_audience_and_evidence() -> None:
+    analysis = MarketAnalysis(
+        niches=[
+            MarketNiche(
+                niche="First niche",
+                audience="First audience",
+                evidence=["Finding: https://example.com/a"],
+            ),
+            MarketNiche(niche="Second niche", audience="Second audience", evidence=[]),
+        ]
+    )
+
+    text = analysis.to_niches_text()
+
+    assert "1. Niche: First niche" in text
+    assert "Audience: First audience" in text
+    assert "Finding: https://example.com/a" in text
+    assert "2. Niche: Second niche" in text
+    assert "Evidence: (none)" in text
+
+
+def test_market_analysis_to_niches_text_empty() -> None:
+    analysis = MarketAnalysis(niches=[])
+
+    assert analysis.to_niches_text() == ""

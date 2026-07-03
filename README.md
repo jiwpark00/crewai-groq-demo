@@ -207,6 +207,10 @@ project advisor) typically costs **$0**:
 - **Groq**: `llama-3.3-70b-versatile` is available on Groq's free tier,
   subject to requests/tokens-per-minute rate limits. Three short calls per
   run (one per agent) stays well within them for occasional use.
+  (`llama-3.1-8b-instant` was tried as a lower-cost/higher-daily-quota
+  alternative, but its real per-minute limit on this account turned out to
+  be tighter than the 70B model's — tight enough that a single back-to-back
+  run could hit it — so it was reverted. See TODO.md if picking this back up.)
 - **Tavily**: the researcher makes at most 2 searches per run (capped in
   `tasks.yaml`), well within Tavily's free monthly search quota. `advanced`
   search depth costs 2 credits/search vs. 1 for `basic` (Tavily's own

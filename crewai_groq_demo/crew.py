@@ -16,7 +16,7 @@ from crewai_groq_demo.exceptions import (
     RateLimitError,
     ResearchRetryExhaustedError,
 )
-from crewai_groq_demo.models import MarketAnalysis, ProjectIdeaList
+from crewai_groq_demo.models import BuildPlan, MarketAnalysis, ProjectIdeaList
 from crewai_groq_demo.settings import get_settings
 from crewai_groq_demo.tools.counting_tavily_search_tool import CountingTavilySearchTool
 
@@ -68,6 +68,10 @@ class GroqDemoCrew:
         return Agent(config=self.agents_config["market_analyst"], llm=self.llm)
 
     @agent
+    def builder(self) -> Agent:
+        return Agent(config=self.agents_config["builder"], llm=self.llm)
+
+    @agent
     def researcher(self) -> Agent:
         settings = get_settings()
         if not settings.tavily_api_key:
@@ -101,6 +105,10 @@ class GroqDemoCrew:
         return Task(
             config=self.tasks_config["market_analysis_task"], output_pydantic=MarketAnalysis
         )
+
+    @task
+    def builder_task(self) -> Task:
+        return Task(config=self.tasks_config["builder_task"], output_pydantic=BuildPlan)
 
 
 class TeachingResult(NamedTuple):
@@ -317,3 +325,39 @@ def run_market_analysis(user_prompt: str, research_result: str) -> MarketAnalysi
         analysis.niches = []
 
     return MarketAnalysisResult(analysis, crew.usage_metrics or UsageMetrics())
+
+
+NO_MARKET_ANALYSIS_TEXT = "(no market analysis was run)"
+"""Sentinel passed as `niches_text` to run_builder when Market Analyst was
+skipped (it's optional, unlike Builder) — Builder falls back to assessing
+the user's request directly from general knowledge rather than a specific,
+evidence-backed niche.
+"""
+
+
+class BuilderResult(NamedTuple):
+    plan: BuildPlan
+    usage: UsageMetrics
+
+
+def run_builder(user_prompt: str, niches_text: str) -> BuilderResult:
+    """Run the builder agent to assess build differentiation.
+
+    Takes pre-formatted `niches_text` (see `MarketAnalysis.to_niches_text()`)
+    rather than the raw MarketAnalysis object or research_result — Builder
+    only needs each niche's own compact evidence, not the researcher's full
+    prose, and needs no research context at all when Market Analyst was
+    skipped (falls back to general knowledge, signaled by
+    `NO_MARKET_ANALYSIS_TEXT`).
+    """
+    crew_definition = GroqDemoCrew()
+    crew = Crew(
+        agents=[crew_definition.builder()],
+        tasks=[crew_definition.builder_task()],
+    )
+    try:
+        result = crew.kickoff(inputs={"user_prompt": user_prompt, "niches_text": niches_text})
+    except LiteLLMRateLimitError as error:
+        raise RateLimitError(provider="groq") from error
+    plan: BuildPlan = result.pydantic
+    return BuilderResult(plan, crew.usage_metrics or UsageMetrics())

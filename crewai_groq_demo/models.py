@@ -75,3 +75,40 @@ class MarketNiche(BaseModel):
 
 class MarketAnalysis(BaseModel):
     niches: list[MarketNiche]
+
+    def to_niches_text(self) -> str:
+        """Compact text representation for feeding into Builder's prompt —
+        carries each niche's own evidence forward instead of Builder needing
+        the researcher's full raw text again."""
+        return "\n\n".join(
+            f"{i}. Niche: {niche.niche}\n"
+            f"   Audience: {niche.audience}\n"
+            f"   Evidence: {'; '.join(niche.evidence) if niche.evidence else '(none)'}"
+            for i, niche in enumerate(self.niches, start=1)
+        )
+
+
+class BuildAssessment(BaseModel):
+    niche: str = Field(description="Which niche or request this assessment covers")
+    differentiation: Literal["low", "medium", "high"] = Field(
+        description="How differentiated this build approach is from generic/existing "
+        "agentic-AI solutions already on the market"
+    )
+    differentiation_rationale: str = Field(
+        description="Why this build approach is or isn't differentiated from what already exists"
+    )
+    recommended_package: str = Field(
+        description="Recommended agentic AI package (CrewAI, LangGraph, Google ADK, AutoGen, etc.)"
+    )
+    key_requirements: list[str] = Field(
+        default_factory=list,
+        description="What's actually needed to build this — tools, data, integrations",
+    )
+    risks: list[str] = Field(
+        default_factory=list,
+        description="What could make this harder than it looks",
+    )
+
+
+class BuildPlan(BaseModel):
+    assessments: list[BuildAssessment]

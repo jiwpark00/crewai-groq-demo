@@ -97,11 +97,20 @@ market_analysis_task:
     {research_result}
     ---
 
-    Identify 2-3 specific, underserved niches or pain points that agentic AI
-    could realistically address, using the research above as raw material —
-    not as a list to summarize. A niche must name a specific, recurring task
-    or workflow moment, narrow enough to build a single focused product
-    around.
+    Identify AND SCREEN specific, underserved niches or pain points that
+    agentic AI could realistically address, using the research above as raw
+    material — not as a list to summarize. A niche must name a specific,
+    recurring task or workflow moment, narrow enough to build a single
+    focused product around.
+
+    You are the filter, not just a generator: only keep niches you would
+    genuinely recommend someone spend time building. Reject anything that's
+    still a broad category dressed up as a niche, anything already saturated
+    with existing well-known tools (e.g. generic customer-support chatbots,
+    generic content generators), or anything the research above doesn't
+    actually support. Return up to 3 niches that survive this bar — it is
+    correct and expected to return fewer than 3, or zero, if that's all the
+    research above genuinely supports. Do not pad the list to hit a count.
 
     Do NOT restate a finding as a niche. If a finding says "agentic AI can
     automate workflows and scale personalization," do not write a niche
@@ -126,8 +135,40 @@ market_analysis_task:
     list — never invent or paraphrase findings that weren't actually
     looked up.
   expected_output: >
-    A list of 2-3 specific niches, each naming a recurring task/workflow
-    pain point (not a restated finding or broad category), who experiences
-    it, and the research finding (with URL) that inspired it — or an empty
-    list if no research was run.
+    A list of 0-3 specific niches that survived screening, each naming a
+    recurring task/workflow pain point (not a restated finding or broad
+    category), who experiences it, and the research finding (with URL)
+    that inspired it. Empty if no research was run, or if nothing above
+    genuinely clears the bar.
   agent: market_analyst
+
+builder_task:
+  description: >
+    The user asked: "{user_prompt}"
+
+    Candidate niches from market analysis:
+    ---
+    {niches_text}
+    ---
+
+    For each niche listed above, assess how differentiated a product built
+    for it would be from generic/existing agentic-AI solutions already on
+    the market — another generic chatbot, content generator, or "AI
+    assistant for X" is NOT differentiated, even if it would be technically
+    well-built. Recommend a specific agentic AI package (CrewAI, LangGraph,
+    Google ADK, AutoGen, etc.) for each, list what's actually needed to
+    build it (tools, data, integrations), and note what could make it
+    harder than it looks.
+
+    If the candidate niches above literally say "(no market analysis was
+    run)", there is no niche list to work from — instead, assess the
+    user's own request as stated, using your general knowledge of what
+    similar tools already exist. Produce exactly one assessment in this
+    case, covering the user's request as a whole rather than a specific
+    niche.
+  expected_output: >
+    One build assessment per candidate niche above (or exactly one,
+    covering the user's request as a whole, if no market analysis was
+    run), each with a differentiation level and rationale, a recommended
+    package, key requirements, and risks.
+  agent: builder
