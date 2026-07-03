@@ -3,6 +3,7 @@ import io
 
 import streamlit as st
 
+from crewai_groq_demo.cost import estimate_groq_cost, estimate_tavily_cost, format_groq_cost
 from crewai_groq_demo.crew import run_project, run_research, run_teaching
 from crewai_groq_demo.exceptions import CrewDemoError
 
@@ -78,6 +79,14 @@ if st.session_state.research_result is not None:
             f"({discarded_searches} on discarded attempts)."
         )
 
+    if research.from_cache:
+        st.caption("Cost: $0 (served from cache — same prompt was already researched).")
+    else:
+        research_cost = estimate_groq_cost(research.usage) + estimate_tavily_cost(
+            research.successful_search_count
+        )
+        st.caption(f"Estimated cost: ~${research_cost:.4f}")
+
     if research_is_current:
         st.info("Review the sources above before spending a Groq call on the teacher.")
     else:
@@ -109,7 +118,9 @@ if run_teacher_button:
 
 if st.session_state.teaching_result:
     st.markdown("## Teacher's Explanation")
-    st.markdown(st.session_state.teaching_result)
+    st.markdown(st.session_state.teaching_result.text)
+    teaching_cost = estimate_groq_cost(st.session_state.teaching_result.usage)
+    st.caption(f"Estimated cost: ~${teaching_cost:.4f}")
 
     st.info("Review the explanation above before spending another Groq call on project ideas.")
 
@@ -117,14 +128,15 @@ if st.session_state.teaching_result:
         try:
             with st.spinner("Running project advisor..."):
                 st.session_state.project_result = run_project(
-                    st.session_state.gated_prompt, st.session_state.teaching_result
+                    st.session_state.gated_prompt, st.session_state.teaching_result.text
                 )
         except CrewDemoError as error:
             st.error(str(error))
 
 if st.session_state.project_result:
     st.markdown("## Project Ideas")
-    project_ideas = st.session_state.project_result
+    st.caption(format_groq_cost(st.session_state.project_result.usage))
+    project_ideas = st.session_state.project_result.ideas
 
     for idea in project_ideas.ideas:
         with st.container(border=True):

@@ -3,9 +3,10 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crewai.types.usage_metrics import UsageMetrics
 from litellm.exceptions import RateLimitError as LiteLLMRateLimitError
 
-from crewai_groq_demo.crew import ResearchResult, run_research
+from crewai_groq_demo.crew import GroqDemoCrew, ResearchResult, _research_cache, run_research
 from crewai_groq_demo.exceptions import RateLimitError, ResearchRetryExhaustedError
 from crewai_groq_demo.settings import get_settings
 
@@ -21,6 +22,18 @@ def _api_keys(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_research_cache() -> Iterator[None]:
+    """run_research() memoizes results in the module-level `_research_cache`
+    dict keyed by prompt text; several tests below reuse the same prompt
+    string, so the cache must be cleared before and after each test or a
+    later test would silently get an earlier test's mocked result.
+    """
+    _research_cache.clear()
+    yield
+    _research_cache.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +88,19 @@ def _fail_with(error: Exception, query: str) -> Callable[[Any], Any]:
     return _outcome
 
 
+def _succeed_with_usage(text: str, query: str, usage: UsageMetrics) -> Callable[[Any], str]:
+    """Like _succeed_with, but also sets crew.usage_metrics the way a real
+    kickoff() would, so token-usage accumulation can be tested.
+    """
+
+    def _outcome(crew_self: Any) -> str:
+        _record_one_search(query)(crew_self)
+        crew_self.usage_metrics = usage
+        return text
+
+    return _outcome
+
+
 def test_succeeds_on_first_attempt() -> None:
     side_effect = _kickoff_side_effect([_succeed_with("great findings", "first query")])
 
@@ -87,6 +113,7 @@ def test_succeeds_on_first_attempt() -> None:
         total_search_count=1,
         retries=0,
         queries=("first query",),
+        usage=UsageMetrics(),
     )
 
 
@@ -163,3 +190,41 @@ def test_backs_off_with_exponential_sleep_between_retries(_no_real_sleep: MagicM
         run_research("teach me about agents")
 
     _no_real_sleep.assert_called_once_with(2)
+
+
+def test_researcher_agent_uses_tavily_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TAVILY_MAX_RESULTS", "9")
+    monkeypatch.setenv("TAVILY_SEARCH_DEPTH", "advanced")
+    get_settings.cache_clear()
+
+    researcher_agent = GroqDemoCrew().researcher()
+    tool = researcher_agent.tools[0]
+
+    assert tool.max_results == 9
+    assert tool.search_depth == "advanced"
+
+
+def test_captures_token_usage_from_successful_attempt() -> None:
+    usage = UsageMetrics(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    side_effect = _kickoff_side_effect([_succeed_with_usage("findings", "q1", usage)])
+
+    with patch("crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect):
+        result = run_research("teach me about agents")
+
+    assert result.usage == usage
+
+
+def test_serves_repeat_prompt_from_cache_without_calling_kickoff_again() -> None:
+    side_effect = _kickoff_side_effect([_succeed_with("first run findings", "q1")])
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect
+    ) as mocked_kickoff:
+        first = run_research("teach me about agents")
+        second = run_research("teach me about agents")
+
+    mocked_kickoff.assert_called_once()
+    assert first.from_cache is False
+    assert second.from_cache is True
+    assert second.text == "first run findings"
+    assert second.successful_search_count == first.successful_search_count

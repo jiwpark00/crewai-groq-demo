@@ -26,6 +26,8 @@ def test_settings_defaults_when_env_unset(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_MODEL", raising=False)
     monkeypatch.delenv("GROQ_TEMPERATURE", raising=False)
+    monkeypatch.delenv("TAVILY_MAX_RESULTS", raising=False)
+    monkeypatch.delenv("TAVILY_SEARCH_DEPTH", raising=False)
 
     settings = Settings()
 
@@ -33,6 +35,8 @@ def test_settings_defaults_when_env_unset(monkeypatch: pytest.MonkeyPatch) -> No
     assert settings.tavily_api_key == ""
     assert settings.groq_model == "groq/llama-3.3-70b-versatile"
     assert settings.groq_temperature == 0.2
+    assert settings.tavily_max_results == 5
+    assert settings.tavily_search_depth == "basic"
 
 
 def test_settings_load_from_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,6 +44,8 @@ def test_settings_load_from_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
     monkeypatch.setenv("GROQ_MODEL", "groq/some-other-model")
     monkeypatch.setenv("GROQ_TEMPERATURE", "0.7")
+    monkeypatch.setenv("TAVILY_MAX_RESULTS", "8")
+    monkeypatch.setenv("TAVILY_SEARCH_DEPTH", "advanced")
 
     settings = Settings()
 
@@ -47,6 +53,8 @@ def test_settings_load_from_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.tavily_api_key == "test-tavily-key"
     assert settings.groq_model == "groq/some-other-model"
     assert settings.groq_temperature == 0.7
+    assert settings.tavily_max_results == 8
+    assert settings.tavily_search_depth == "advanced"
 
 
 def test_settings_ignores_unknown_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:

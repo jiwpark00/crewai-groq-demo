@@ -1,45 +1,84 @@
+import argparse
+
+from crewai_groq_demo.cost import estimate_groq_cost, estimate_tavily_cost, format_groq_cost
 from crewai_groq_demo.crew import run_project, run_research, run_teaching
 from crewai_groq_demo.exceptions import CrewDemoError
 
-user_prompt = "What can I build with agentic AI as an entrepreneur?"
 
-try:
-    run_research_choice = input(
-        "Run web research first? This makes a Tavily API call. [y/N]: "
-    ).strip().lower()
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the CrewAI + Groq teacher/project-advisor pipeline."
+    )
+    parser.add_argument("prompt", help="What you want the agents to help with.")
+    parser.add_argument(
+        "--research",
+        action="store_true",
+        help="Run web research (Tavily) before teaching.",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="PATH",
+        help="Write the project ideas as markdown to PATH.",
+    )
+    return parser.parse_args()
 
-    if run_research_choice == "y":
-        research = run_research(user_prompt)
-        search_word = "search" if research.successful_search_count == 1 else "searches"
-        print(
-            f"\n=== Researcher's Findings ({research.successful_search_count} {search_word}) ==="
-        )
-        for i, query in enumerate(research.queries, start=1):
-            print(f"  {i}. {query}")
-        if research.retries > 0:
-            print(
-                f"(needed {research.retries} retry(ies) after malformed tool calls — "
-                f"{research.total_search_count} total searches across all attempts)"
-            )
-        print(research.text)
-        research_result = research.text
-    else:
+
+def main() -> None:
+    args = parse_args()
+    total_cost = 0.0
+
+    try:
         research_result = "(no research was run)"
+        if args.research:
+            research = run_research(args.prompt)
+            search_word = "search" if research.successful_search_count == 1 else "searches"
+            print(
+                f"\n=== Researcher's Findings "
+                f"({research.successful_search_count} {search_word}) ==="
+            )
+            for i, query in enumerate(research.queries, start=1):
+                print(f"  {i}. {query}")
+            if research.retries > 0:
+                print(
+                    f"(needed {research.retries} retry(ies) after malformed tool calls — "
+                    f"{research.total_search_count} total searches across all attempts)"
+                )
+            print(research.text)
 
-    teaching_result = run_teaching(user_prompt, research_result)
-    print("\n=== Teacher's Explanation ===")
-    print(teaching_result)
+            if research.from_cache:
+                print("Research cost: $0 (cached)")
+            else:
+                research_cost = estimate_groq_cost(research.usage) + estimate_tavily_cost(
+                    research.successful_search_count
+                )
+                total_cost += research_cost
+                print(f"Research cost: ~${research_cost:.4f}")
+            research_result = research.text
 
-    proceed = input(
-        "\nContinue to project ideas? This makes another Groq API call. [y/N]: "
-    ).strip().lower()
+        teaching = run_teaching(args.prompt, research_result)
+        print("\n=== Teacher's Explanation ===")
+        print(teaching.text)
+        teaching_cost = estimate_groq_cost(teaching.usage)
+        total_cost += teaching_cost
+        print(f"Teaching cost: ~${teaching_cost:.4f}")
 
-    if proceed == "y":
-        project_result = run_project(user_prompt, teaching_result)
+        project = run_project(args.prompt, teaching.text, output_path=args.output)
         print("\n=== Project Ideas ===")
-        print(project_result.to_markdown())
-    else:
-        print("Stopped before running the project advisor.")
-except CrewDemoError as error:
-    print(f"\nError: {error}")
-    raise SystemExit(1) from error
+        print(project.ideas.to_markdown())
+        print(f"Project-advisor cost: {format_groq_cost(project.usage)}")
+        if project.usage.successful_requests > 0:
+            total_cost += estimate_groq_cost(project.usage)
+        if args.output:
+            print(f"Wrote project ideas to {args.output}")
+
+        total_note = (
+            "" if project.usage.successful_requests > 0 else " (excludes project-advisor call)"
+        )
+        print(f"\nTotal estimated cost: ~${total_cost:.4f}{total_note}")
+    except CrewDemoError as error:
+        print(f"\nError: {error}")
+        raise SystemExit(1) from error
+
+
+if __name__ == "__main__":
+    main()

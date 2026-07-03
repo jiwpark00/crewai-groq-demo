@@ -8,6 +8,7 @@ from typing import NamedTuple
 import crewai.llms.cache as _crewai_cache
 from crewai import LLM, Agent, Crew, Task
 from crewai.project import CrewBase, agent, task
+from crewai.types.usage_metrics import UsageMetrics
 from litellm.exceptions import RateLimitError as LiteLLMRateLimitError
 
 from crewai_groq_demo.exceptions import (
@@ -48,10 +49,14 @@ class GroqDemoCrew:
 
     @agent
     def researcher(self) -> Agent:
-        if not get_settings().tavily_api_key:
+        settings = get_settings()
+        if not settings.tavily_api_key:
             raise MissingAPIKeyError("TAVILY_API_KEY")
 
-        search_tool = CountingTavilySearchTool(max_results=5, search_depth="basic")
+        search_tool = CountingTavilySearchTool(
+            max_results=settings.tavily_max_results,
+            search_depth=settings.tavily_search_depth,
+        )
         return Agent(
             config=self.agents_config["researcher"],
             llm=self.llm,
@@ -72,7 +77,12 @@ class GroqDemoCrew:
         return Task(config=self.tasks_config["research_task"])
 
 
-def run_teaching(user_prompt: str, research_result: str) -> str:
+class TeachingResult(NamedTuple):
+    text: str
+    usage: UsageMetrics
+
+
+def run_teaching(user_prompt: str, research_result: str) -> TeachingResult:
     """Run only the teacher agent and return its explanation."""
     crew_definition = GroqDemoCrew()
     crew = Crew(
@@ -85,11 +95,22 @@ def run_teaching(user_prompt: str, research_result: str) -> str:
         )
     except LiteLLMRateLimitError as error:
         raise RateLimitError(provider="groq") from error
-    return str(result)
+    return TeachingResult(str(result), crew.usage_metrics or UsageMetrics())
 
 
-def run_project(user_prompt: str, teaching_result: str) -> ProjectIdeaList:
-    """Run the project advisor using the teacher's explanation as input."""
+class ProjectResult(NamedTuple):
+    ideas: ProjectIdeaList
+    usage: UsageMetrics
+
+
+def run_project(
+    user_prompt: str, teaching_result: str, output_path: str | None = None
+) -> ProjectResult:
+    """Run the project advisor using the teacher's explanation as input.
+
+    Only writes markdown to `output_path` when one is given — callers running
+    in a server/UI context (Streamlit) shouldn't write files to disk on every run.
+    """
     crew_definition = GroqDemoCrew()
     crew = Crew(
         agents=[crew_definition.project_advisor()],
@@ -103,10 +124,11 @@ def run_project(user_prompt: str, teaching_result: str) -> ProjectIdeaList:
         raise RateLimitError(provider="groq") from error
     project_ideas: ProjectIdeaList = result.pydantic
 
-    with open("output.md", "w", encoding="utf-8") as file:
-        file.write(project_ideas.to_markdown())
+    if output_path is not None:
+        with open(output_path, "w", encoding="utf-8") as file:
+            file.write(project_ideas.to_markdown())
 
-    return project_ideas
+    return ProjectResult(project_ideas, crew.usage_metrics or UsageMetrics())
 
 
 class ResearchResult(NamedTuple):
@@ -119,18 +141,35 @@ class ResearchResult(NamedTuple):
     """Number of failed attempts before the one that succeeded."""
     queries: tuple[str, ...]
     """The actual search queries used by the successful attempt, in order."""
+    usage: UsageMetrics
+    """Groq token usage summed across all attempts (failed attempts raise before
+    CrewAI populates their usage, so this may undercount tokens burned on retries)."""
+    from_cache: bool = False
+    """True when this result was served from `_research_cache` instead of a
+    fresh Tavily/Groq call — callers should treat it as $0 cost."""
+
+
+_research_cache: dict[str, ResearchResult] = {}
 
 
 def run_research(user_prompt: str) -> ResearchResult:
     """Run the researcher agent, retrying on malformed tool calls or rate limits.
+
+    Repeat calls with the same `user_prompt` (within this process) are served
+    from `_research_cache` instead of re-running Tavily/Groq.
 
     Builds a fresh agent/crew per attempt so a failed attempt's conversation
     state and search count don't bleed into the retry. Retries back off
     exponentially (2s, 4s) so a rate-limited attempt doesn't immediately
     repeat into another rate limit.
     """
+    cached = _research_cache.get(user_prompt)
+    if cached is not None:
+        return cached._replace(from_cache=True)
+
     max_attempts = 3
     total_search_count = 0
+    total_usage = UsageMetrics()
     last_error: Exception | None = None
 
     for attempt in range(max_attempts):
@@ -158,10 +197,19 @@ def run_research(user_prompt: str) -> ResearchResult:
 
         successful_search_count = researcher_agent.tools[0].call_count
         total_search_count += successful_search_count
+        if crew.usage_metrics:
+            total_usage.add_usage_metrics(crew.usage_metrics)
         queries = tuple(researcher_agent.tools[0].queries)
-        return ResearchResult(
-            str(result), successful_search_count, total_search_count, attempt, queries
+        research_result = ResearchResult(
+            str(result),
+            successful_search_count,
+            total_search_count,
+            attempt,
+            queries,
+            total_usage,
         )
+        _research_cache[user_prompt] = research_result
+        return research_result
 
     if isinstance(last_error, LiteLLMRateLimitError):
         raise RateLimitError(provider="groq") from last_error
