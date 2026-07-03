@@ -98,15 +98,28 @@ def run_teaching(user_prompt: str, research_result: str) -> TeachingResult:
     return TeachingResult(str(result), crew.usage_metrics or UsageMetrics())
 
 
+NO_RESEARCH_TEXT = "(no research was run)"
+"""Sentinel passed as `research_result` when the researcher stage was skipped.
+
+Shared by main.py/app.py so both UIs agree on the exact string run_project()
+checks for — and by the teacher, so it gets the same signal.
+"""
+
+
 class ProjectResult(NamedTuple):
     ideas: ProjectIdeaList
     usage: UsageMetrics
 
 
 def run_project(
-    user_prompt: str, teaching_result: str, output_path: str | None = None
+    user_prompt: str,
+    teaching_result: str,
+    research_result: str,
+    output_path: str | None = None,
 ) -> ProjectResult:
-    """Run the project advisor using the teacher's explanation as input.
+    """Run the project advisor using the teacher's explanation and the raw
+    research findings as input, so ideas can cite specific findings/URLs
+    rather than whatever survived into the teacher's paraphrased summary.
 
     Only writes markdown to `output_path` when one is given — callers running
     in a server/UI context (Streamlit) shouldn't write files to disk on every run.
@@ -118,11 +131,22 @@ def run_project(
     )
     try:
         result = crew.kickoff(
-            inputs={"user_prompt": user_prompt, "teaching_result": teaching_result}
+            inputs={
+                "user_prompt": user_prompt,
+                "teaching_result": teaching_result,
+                "research_result": research_result,
+            }
         )
     except LiteLLMRateLimitError as error:
         raise RateLimitError(provider="groq") from error
     project_ideas: ProjectIdeaList = result.pydantic
+
+    if research_result.strip() == NO_RESEARCH_TEXT:
+        # Don't trust the model to self-report low confidence when there's
+        # nothing backing an idea — enforce it rather than risk a
+        # fabricated-sounding "high confidence" idea with no evidence.
+        for idea in project_ideas.ideas:
+            idea.confidence = "low"
 
     if output_path is not None:
         with open(output_path, "w", encoding="utf-8") as file:

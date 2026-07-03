@@ -6,7 +6,13 @@ from unittest.mock import patch
 import pytest
 from crewai.types.usage_metrics import UsageMetrics
 
-from crewai_groq_demo.crew import ProjectResult, TeachingResult, run_project, run_teaching
+from crewai_groq_demo.crew import (
+    NO_RESEARCH_TEXT,
+    ProjectResult,
+    TeachingResult,
+    run_project,
+    run_teaching,
+)
 from crewai_groq_demo.models import ProjectIdea, ProjectIdeaList
 from crewai_groq_demo.settings import get_settings
 
@@ -49,7 +55,7 @@ def _project_kickoff_returning(ideas: ProjectIdeaList, usage: UsageMetrics) -> A
     return _side_effect
 
 
-def _sample_ideas() -> ProjectIdeaList:
+def _sample_ideas(confidence: str = "high") -> ProjectIdeaList:
     return ProjectIdeaList(
         ideas=[
             ProjectIdea(
@@ -58,6 +64,10 @@ def _sample_ideas() -> ProjectIdeaList:
                 kpi="KPI",
                 package="CrewAI",
                 rationale="Because",
+                niche_rationale="Because of specifics in the research",
+                evidence=["Some finding: https://example.com"],
+                confidence=confidence,  # type: ignore[arg-type]
+                open_questions=["Will this work?"],
             )
         ]
     )
@@ -73,7 +83,7 @@ def test_run_project_does_not_write_file_by_default(tmp_path: Path, monkeypatch:
         autospec=True,
         side_effect=_project_kickoff_returning(ideas, usage),
     ):
-        result = run_project("user prompt", "teaching result")
+        result = run_project("user prompt", "teaching result", "some research findings")
 
     assert result == ProjectResult(ideas=ideas, usage=usage)
     assert not (tmp_path / "output.md").exists()
@@ -89,6 +99,58 @@ def test_run_project_writes_file_when_output_path_given(tmp_path: Path) -> None:
         autospec=True,
         side_effect=_project_kickoff_returning(ideas, usage),
     ):
-        run_project("user prompt", "teaching result", output_path=str(output_path))
+        run_project(
+            "user prompt",
+            "teaching result",
+            "some research findings",
+            output_path=str(output_path),
+        )
 
     assert output_path.read_text(encoding="utf-8") == ideas.to_markdown()
+
+
+def test_run_project_passes_research_result_to_task_inputs() -> None:
+    usage = UsageMetrics()
+    ideas = _sample_ideas()
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff",
+        autospec=True,
+        side_effect=_project_kickoff_returning(ideas, usage),
+    ) as mocked_kickoff:
+        run_project("user prompt", "teaching result", "specific research findings")
+
+    inputs = mocked_kickoff.call_args.kwargs["inputs"]
+    assert inputs == {
+        "user_prompt": "user prompt",
+        "teaching_result": "teaching result",
+        "research_result": "specific research findings",
+    }
+
+
+def test_run_project_forces_low_confidence_when_no_research_was_run() -> None:
+    usage = UsageMetrics()
+    ideas = _sample_ideas(confidence="high")  # model claims high confidence anyway
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff",
+        autospec=True,
+        side_effect=_project_kickoff_returning(ideas, usage),
+    ):
+        result = run_project("user prompt", "teaching result", NO_RESEARCH_TEXT)
+
+    assert all(idea.confidence == "low" for idea in result.ideas.ideas)
+
+
+def test_run_project_leaves_confidence_alone_when_research_was_run() -> None:
+    usage = UsageMetrics()
+    ideas = _sample_ideas(confidence="high")
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff",
+        autospec=True,
+        side_effect=_project_kickoff_returning(ideas, usage),
+    ):
+        result = run_project("user prompt", "teaching result", "real research findings")
+
+    assert all(idea.confidence == "high" for idea in result.ideas.ideas)

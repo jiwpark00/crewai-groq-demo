@@ -4,8 +4,9 @@ import io
 import streamlit as st
 
 from crewai_groq_demo.cost import estimate_groq_cost, estimate_tavily_cost, format_groq_cost
-from crewai_groq_demo.crew import run_project, run_research, run_teaching
+from crewai_groq_demo.crew import NO_RESEARCH_TEXT, run_project, run_research, run_teaching
 from crewai_groq_demo.exceptions import CrewDemoError
+from crewai_groq_demo.models import ProjectIdea
 
 st.set_page_config(
     page_title="CrewAI Groq Demo",
@@ -28,6 +29,7 @@ for key in (
     "gated_prompt",
     "research_result",
     "research_prompt",
+    "research_for_project",
 ):
     st.session_state.setdefault(key, None)
 
@@ -104,7 +106,7 @@ if run_teacher_button:
         research_for_teacher = (
             st.session_state.research_result.text
             if research_is_current
-            else "(no research was run for this prompt)"
+            else NO_RESEARCH_TEXT
         )
         try:
             with st.spinner("Running teaching agent..."):
@@ -112,6 +114,7 @@ if run_teacher_button:
                     user_prompt, research_for_teacher
                 )
             st.session_state.gated_prompt = user_prompt
+            st.session_state.research_for_project = research_for_teacher
             st.session_state.project_result = None
         except CrewDemoError as error:
             st.error(str(error))
@@ -128,7 +131,9 @@ if st.session_state.teaching_result:
         try:
             with st.spinner("Running project advisor..."):
                 st.session_state.project_result = run_project(
-                    st.session_state.gated_prompt, st.session_state.teaching_result.text
+                    st.session_state.gated_prompt,
+                    st.session_state.teaching_result.text,
+                    st.session_state.research_for_project,
                 )
         except CrewDemoError as error:
             st.error(str(error))
@@ -145,20 +150,51 @@ if st.session_state.project_result:
             st.markdown(f"**KPI:** {idea.kpi}")
             st.markdown(f"**Package:** {idea.package}")
             st.markdown(f"**Why this package:** {idea.rationale}")
+            st.markdown(f"**Why this niche:** {idea.niche_rationale}")
+
+            confidence_badge = {"high": "🟢", "medium": "🟡", "low": "🔴"}[idea.confidence]
+            st.markdown(f"**Confidence:** {confidence_badge} {idea.confidence}")
+
+            if idea.evidence:
+                with st.expander(f"Evidence ({len(idea.evidence)})"):
+                    for item in idea.evidence:
+                        st.markdown(f"- {item}")
+            else:
+                st.caption("No research backs this idea — treat it as speculative.")
+
+            if idea.open_questions:
+                with st.expander(f"Open questions ({len(idea.open_questions)})"):
+                    for question in idea.open_questions:
+                        st.markdown(f"- {question}")
+
+    def _flatten_idea(idea: ProjectIdea) -> dict[str, object]:
+        row = idea.model_dump()
+        row["evidence"] = "; ".join(idea.evidence)
+        row["open_questions"] = "; ".join(idea.open_questions)
+        return row
 
     with st.expander("View as table"):
         st.dataframe(
-            [idea.model_dump() for idea in project_ideas.ideas],
+            [_flatten_idea(idea) for idea in project_ideas.ideas],
             use_container_width=True,
         )
 
+    csv_fieldnames = [
+        "name",
+        "goal",
+        "kpi",
+        "package",
+        "rationale",
+        "niche_rationale",
+        "confidence",
+        "evidence",
+        "open_questions",
+    ]
     csv_buffer = io.StringIO()
-    writer = csv.DictWriter(
-        csv_buffer, fieldnames=["name", "goal", "kpi", "package", "rationale"]
-    )
+    writer = csv.DictWriter(csv_buffer, fieldnames=csv_fieldnames)
     writer.writeheader()
     for idea in project_ideas.ideas:
-        writer.writerow(idea.model_dump())
+        writer.writerow(_flatten_idea(idea))
 
     st.download_button(
         label="Download ideas.csv",

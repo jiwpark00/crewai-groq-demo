@@ -1,7 +1,7 @@
 import argparse
 
 from crewai_groq_demo.cost import estimate_groq_cost, estimate_tavily_cost, format_groq_cost
-from crewai_groq_demo.crew import run_project, run_research, run_teaching
+from crewai_groq_demo.crew import NO_RESEARCH_TEXT, run_project, run_research, run_teaching
 from crewai_groq_demo.exceptions import CrewDemoError
 
 
@@ -28,7 +28,7 @@ def main() -> None:
     total_cost = 0.0
 
     try:
-        research_result = "(no research was run)"
+        research_result = NO_RESEARCH_TEXT
         if args.research:
             research = run_research(args.prompt)
             search_word = "search" if research.successful_search_count == 1 else "searches"
@@ -62,7 +62,9 @@ def main() -> None:
         total_cost += teaching_cost
         print(f"Teaching cost: ~${teaching_cost:.4f}")
 
-        project = run_project(args.prompt, teaching.text, output_path=args.output)
+        project = run_project(
+            args.prompt, teaching.text, research_result, output_path=args.output
+        )
         print("\n=== Project Ideas ===")
         print(project.ideas.to_markdown())
         print(f"Project-advisor cost: {format_groq_cost(project.usage)}")

@@ -16,11 +16,16 @@ entrepreneur?"* and three agents work through it in sequence:
 2. **Teacher** — explains the agentic-AI concepts relevant to your specific
    question, grounded in the research.
 3. **Project Advisor** — turns that explanation into a structured list of
-   project ideas, each with a goal, KPI, recommended package, and rationale.
+   project ideas, each with a goal, KPI, recommended package, and rationale
+   — grounded in the research findings themselves (not just the teacher's
+   paraphrase), with cited evidence, a confidence level, and open validation
+   questions per idea.
 
-Each stage is gated behind a manual step (a button in the UI, a y/N prompt in
-the CLI) so you decide when to spend an API call, rather than the app
-burning through them automatically.
+In the Streamlit UI, each stage is gated behind a manual button so you
+decide when to spend an API call rather than the app burning through them
+automatically. The CLI runs non-interactively (see `--research`/`--output`
+below) — research is opt-in per invocation, and the teacher/project-advisor
+calls always run since that's the point of scripting it.
 
 ## Demo
 
@@ -33,9 +38,10 @@ flowchart LR
     U[User prompt] --> R[Researcher agent<br/>Tavily search]
     R --> T[Teacher agent<br/>explains concepts]
     U --> T
-    T --> P[Project Advisor agent<br/>structured project ideas]
+    T --> P[Project Advisor agent<br/>evidence-grounded project ideas]
     U --> P
-    P --> O[output.md / CSV download]
+    R --> P
+    P --> O[output.md opt-in / CSV download]
 ```
 
 Each agent runs as its own single-task `Crew` (see `run_research`,
@@ -48,6 +54,7 @@ crewai_groq_demo/
   crew.py                 # LLM setup, per-agent Crew runners
   models.py                # Pydantic schema for project ideas
   settings.py               # Typed, validated env config (pydantic-settings)
+  cost.py                    # Groq/Tavily cost estimation from token usage
   exceptions.py              # Typed exceptions (MissingAPIKeyError, RateLimitError, ...)
   config/
     agents.yaml            # role/goal/backstory per agent
@@ -84,9 +91,17 @@ rather than a stack trace.
 ### Running
 
 ```bash
-uv run main.py                    # CLI
-uv run streamlit run app.py       # Streamlit UI
+# Streamlit UI — gated buttons, review before each API call
+uv run streamlit run app.py
+
+# CLI — runs teacher + project advisor non-interactively; flags opt into extras
+uv run python main.py "What can I build for real estate agents?"
+uv run python main.py "What can I build for real estate agents?" --research
+uv run python main.py "What can I build for real estate agents?" --research --output output.md
 ```
+
+`--research` runs the researcher (Tavily) first; `--output PATH` writes the
+project ideas as markdown to PATH (omit it and nothing is written to disk).
 
 ## Testing
 
@@ -102,13 +117,21 @@ its return value/exception, so tests run in milliseconds, for free, and
 don't need a real `.env`. Coverage so far focuses on what's testable without
 a live LLM in the loop:
 
-- `models.py` — `ProjectIdeaList.to_markdown()` formatting
+- `models.py` — `ProjectIdeaList.to_markdown()`/`ProjectIdea.to_markdown_block()`
+  formatting, including the evidence/confidence/open-questions fields
 - `exceptions.py` — message formatting and attributes on each typed error
 - `settings.py` — env var loading, defaults, and `get_settings()` caching
+  (including Tavily's `max_results`/`search_depth`)
+- `cost.py` — Groq/Tavily cost estimation math and the "cost unavailable"
+  fallback for structured-output calls CrewAI doesn't track usage for
 - `tools/counting_tavily_search_tool.py` — call-count/query tracking
 - `crew.py`'s `run_research` retry loop — first-try success, retry-then-
-  succeed, retries exhausted, Groq rate-limit handling, and the exponential
-  backoff between retries
+  succeed, retries exhausted, Groq rate-limit handling, the exponential
+  backoff between retries, token-usage accumulation, and the same-process
+  research cache
+- `crew.py`'s `run_teaching`/`run_project` — usage returned alongside each
+  result, `output.md` only written when `output_path` is given, and
+  confidence forced to `"low"` when no research was run
 
 `ruff` and `mypy` are configured in `pyproject.toml`
 (`select = ["E", "F", "I", "UP", "B"]` for ruff; fairly strict mypy with a
@@ -130,22 +153,35 @@ whatever audience/domain/count you specify in the prompt.
 
 ## Example output
 
-Given *"What can I build with agentic AI as an entrepreneur?"*, the project
-advisor produces structured ideas like:
+Given *"How could a small marketing agency use agentic AI?"* with
+`--research`, the project advisor produces structured ideas like:
 
 ```markdown
-## Client Onboarding Concierge
+## Automated Customer Journeys
 
-- **Goal:** Automatically gather, verify, and summarize new-client intake
-  documents into a ready-to-review packet.
-- **KPI:** Time from signed contract to fully verified client file.
+- **Goal:** Orchestrate customer journeys in real-time, enabling autonomous
+  adaptation and optimization of campaigns.
+- **KPI:** Increased engagement and conversion rates.
 - **Package:** CrewAI
-- **Why this package:** Config-driven, sequential agent roles map cleanly
-  onto a fixed intake checklist.
+- **Why this package:** Enables AI-powered workflows that automatically
+  adjust to individual customer behaviors.
+- **Why this niche:** Utilizes agentic AI to automate workflows and scale
+  personalization, as seen in Adobe's AI for Business.
+- **Confidence:** high
+- **Evidence:**
+  - Agentic AI can be used by small marketing agencies to automate
+    workflows and scale personalization: https://business.adobe.com/ai/agentic-ai-for-marketing.html
+- **Open questions:**
+  - What specific customer journey touchpoints would be automated?
 ```
 
-The Streamlit UI renders each idea as a card and also offers a CSV download;
-the CLI writes the full set to `output.md`.
+Skip `--research` and the same idea instead comes back with `confidence:
+low` and `- **Evidence:** none — no research was run for this idea` — forced
+in code (`run_project` in `crew.py`), not left to the model to self-report.
+
+The Streamlit UI renders each idea as a card (with evidence/open-questions
+in expanders) and also offers a CSV download; the CLI prints the same to
+stdout and writes it to disk only if you pass `--output PATH`.
 
 ## Cost estimate per run
 
@@ -157,6 +193,17 @@ project advisor) typically costs **$0**:
   run (one per agent) stays well within them for occasional use.
 - **Tavily**: the researcher makes at most 2 searches per run (capped in
   `tasks.yaml`), well within Tavily's free monthly search quota.
+
+The app estimates real cost per run, using each call's actual Groq token
+usage (`crew.usage_metrics`) and Tavily's per-search pricing — see
+`cost.py`. Both the CLI and Streamlit UI print/show this per stage. One
+caveat: the project advisor uses `output_pydantic` for structured output,
+and CrewAI doesn't track token usage for that code path, so its cost always
+shows as "unavailable" rather than a (misleading) `$0` — a confirmed CrewAI
+limitation, not a bug here. Repeating the same research prompt within one
+process (e.g. re-running the Streamlit app without changing the prompt)
+skips Tavily/Groq entirely via an in-memory cache, and shows as `$0` since
+no call was actually made.
 
 If you exceed free-tier rate limits, Groq/Tavily calls will fail with a
 429-style error rather than silently charging you — neither provider is
@@ -197,6 +244,16 @@ configured with a paid fallback here.
   `mark_cache_breakpoint` to a no-op, working around a CrewAI↔Groq
   incompatibility (Groq rejects a `cache_breakpoint` field CrewAI adds to
   messages). See the comment in `crew.py` before removing it.
+- **Evidence-grounded ideas**: `project_task` receives the researcher's raw
+  findings directly (not just the teacher's paraphrase of them), and must
+  cite specific findings by URL per idea rather than reach for general
+  knowledge. `run_project` forces every idea's `confidence` to `"low"` when
+  no research was run, rather than trusting the model to self-report it.
+- **Cost tracking**: each agent call returns its `crew.usage_metrics`
+  alongside the result; `cost.py` turns that into an estimated dollar
+  amount using named pricing constants in `settings.py`. Repeat research
+  prompts are served from an in-process cache (`crew.py`'s
+  `_research_cache`) instead of re-hitting Tavily/Groq.
 
 ## Roadmap
 
