@@ -164,7 +164,7 @@ def test_exhausts_retries_on_repeated_tool_use_failed() -> None:
 def test_raises_rate_limit_error_when_all_attempts_rate_limited() -> None:
     def _rate_limited(_query: str) -> Callable[[Any], Any]:
         error = LiteLLMRateLimitError(
-            message="rate limited", llm_provider="groq", model="groq/llama-3.3-70b-versatile"
+            message="rate limited", llm_provider="groq", model="groq/openai/gpt-oss-120b"
         )
         return _fail_with(error, _query)
 

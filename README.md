@@ -127,7 +127,10 @@ a live LLM in the loop:
 - `settings.py` — env var loading, defaults, and `get_settings()` caching
   (including Tavily's `max_results`/`search_depth`)
 - `cost.py` — Groq/Tavily cost estimation math and the "cost unavailable"
-  fallback for structured-output calls CrewAI doesn't track usage for
+  fallback (kept as a defensive guard; no task currently hits it — see
+  "Structured output" below)
+- `structured_output.py` — JSON parsing/fence-stripping for the project
+  advisor's, market analyst's, and builder's structured outputs
 - `tools/counting_tavily_search_tool.py` — call-count/query tracking
 - `crew.py`'s `run_research` retry loop — first-try success, retry-then-
   succeed, retries exhausted, Groq rate-limit handling, the exponential
@@ -148,6 +151,12 @@ a live LLM in the loop:
 - `crew.py`'s `run_teaching`/`run_project` — usage returned alongside each
   result, `output.md` only written when `output_path` is given, and
   confidence forced to `"low"` when no research was run
+- `structured_output.py`'s `parse_structured_output` — clean JSON, JSON
+  wrapped in markdown fences, JSON with surrounding prose, and both
+  malformed-JSON and schema-mismatch failures
+- `crew.py`'s `_kickoff_with_structured_output` (via `run_builder`) — retry-
+  then-succeed on malformed JSON, retries exhausted, and Groq rate limits
+  raised immediately without retry
 
 `ruff` and `mypy` are configured in `pyproject.toml`
 (`select = ["E", "F", "I", "UP", "B"]` for ruff; fairly strict mypy with a
@@ -204,13 +213,10 @@ stdout and writes it to disk only if you pass `--output PATH`.
 Both providers have usable free tiers, so a full run (research + teacher +
 project advisor) typically costs **$0**:
 
-- **Groq**: `llama-3.3-70b-versatile` is available on Groq's free tier,
-  subject to requests/tokens-per-minute rate limits. Three short calls per
-  run (one per agent) stays well within them for occasional use.
-  (`llama-3.1-8b-instant` was tried as a lower-cost/higher-daily-quota
-  alternative, but its real per-minute limit on this account turned out to
-  be tighter than the 70B model's — tight enough that a single back-to-back
-  run could hit it — so it was reverted. See TODO.md if picking this back up.)
+- **Groq**: `openai/gpt-oss-120b` is available on Groq's free tier, subject
+  to requests/tokens-per-minute rate limits. Three short calls per run (one
+  per agent) stays well within them for occasional use. This is the second
+  model tried here — see "Model history" below for what didn't work and why.
 - **Tavily**: the researcher makes at most 2 searches per run (capped in
   `tasks.yaml`), well within Tavily's free monthly search quota. `advanced`
   search depth costs 2 credits/search vs. 1 for `basic` (Tavily's own
@@ -218,14 +224,34 @@ project advisor) typically costs **$0**:
 
 The app estimates real cost per run, using each call's actual Groq token
 usage (`crew.usage_metrics`) and Tavily's per-search pricing — see
-`cost.py`. Both the CLI and Streamlit UI print/show this per stage. One
-caveat: the project advisor uses `output_pydantic` for structured output,
-and CrewAI doesn't track token usage for that code path, so its cost always
-shows as "unavailable" rather than a (misleading) `$0` — a confirmed CrewAI
-limitation, not a bug here. Repeating the same research prompt within one
-process (e.g. re-running the Streamlit app without changing the prompt)
-skips Tavily/Groq entirely via an in-memory cache, and shows as `$0` since
-no call was actually made.
+`cost.py`. Both the CLI and Streamlit UI print/show this per stage.
+Repeating the same research prompt within one process (e.g. re-running the
+Streamlit app without changing the prompt) skips Tavily/Groq entirely via an
+in-memory cache, and shows as `$0` since no call was actually made.
+
+### Model history
+
+- `llama-3.3-70b-versatile` was the original default. Groq has scheduled it
+  for deprecation on **2026-08-16**, recommending `openai/gpt-oss-120b` or
+  `qwen/qwen3.6-27b` as replacements — see
+  [console.groq.com/docs/deprecations](https://console.groq.com/docs/deprecations).
+- `llama-3.1-8b-instant` was tried for its larger published daily quota, but
+  its real per-minute limit on this account turned out to be tighter than
+  the 70B model's — tight enough that a single back-to-back run could hit
+  it — so it was reverted.
+- `qwen/qwen3-32b` and `meta-llama/llama-4-scout-17b-16e-instruct` both
+  failed outright on CrewAI's `output_pydantic`/`InternalInstructor`
+  structured-output path (a Groq `tool_use_failed` error), even though
+  plain-text generation worked fine on both.
+- `openai/gpt-oss-120b` hit the same class of failure at first (Groq
+  rejected a tool call to an undeclared `"json"` tool — a known quirk of
+  gpt-oss's own "Harmony" response format leaking through). Rather than
+  keep hunting for a model that happened to be compatible with that path,
+  structured output was switched to plain JSON-in-text + manual parsing
+  (`structured_output.py`) — see "Structured output" below. That fix is
+  portable across models, not specific to gpt-oss, and also fixed the
+  "cost unavailable" issue below since normal text generation *does* track
+  token usage.
 
 If you exceed free-tier rate limits, Groq/Tavily calls will fail with a
 429-style error rather than silently charging you — neither provider is
@@ -242,10 +268,17 @@ configured with a paid fallback here.
   and expected outputs live in
   [config/tasks.yaml](crewai_groq_demo/config/tasks.yaml). `crew.py` wires
   them together rather than hardcoding prompts in Python.
-- **Structured output**: the project advisor's task uses
-  `output_pydantic=ProjectIdeaList`, so its output is validated, typed data
-  (not markdown that needs parsing) — see
-  [models.py](crewai_groq_demo/models.py).
+- **Structured output**: the project advisor, market analyst, and builder
+  tasks are prompted to emit a raw JSON object matching their Pydantic
+  model, then parsed/validated by hand in
+  [structured_output.py](crewai_groq_demo/structured_output.py) — not via
+  CrewAI's `output_pydantic`/`InternalInstructor`, which forces structured
+  output through Groq's tool-calling protocol. That protocol's reliability
+  varies a lot per model (confirmed broken on 3 of the 4 non-default models
+  tried — see "Model history" above), while plain-text generation works
+  everywhere. `crew.py`'s `_kickoff_with_structured_output` retries (same
+  backoff as the researcher) if a response doesn't parse. See
+  [models.py](crewai_groq_demo/models.py) for the schemas themselves.
 - **Search accountability**: `CountingTavilySearchTool` wraps CrewAI's
   Tavily tool to track exactly how many searches ran and what was searched,
   so the UI can warn you if the researcher used more than one search or

@@ -33,7 +33,7 @@ def test_settings_defaults_when_env_unset(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert settings.groq_api_key == ""
     assert settings.tavily_api_key == ""
-    assert settings.groq_model == "groq/llama-3.3-70b-versatile"
+    assert settings.groq_model == "groq/openai/gpt-oss-120b"
     assert settings.groq_temperature == 0.2
     assert settings.tavily_max_results == 5
     assert settings.tavily_search_depth == "basic"

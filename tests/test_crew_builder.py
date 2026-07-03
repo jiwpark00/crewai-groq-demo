@@ -19,10 +19,9 @@ def _api_keys(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def _builder_kickoff_returning(plan: BuildPlan, usage: UsageMetrics) -> Any:
-    def _side_effect(crew_self: Any, inputs: dict[str, Any] | None = None) -> Any:
+    def _side_effect(crew_self: Any, inputs: dict[str, Any] | None = None) -> str:
         crew_self.usage_metrics = usage
-        result = type("Result", (), {"pydantic": plan})()
-        return result
+        return plan.model_dump_json()
 
     return _side_effect
 

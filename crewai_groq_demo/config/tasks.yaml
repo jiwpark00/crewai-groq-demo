@@ -67,12 +67,18 @@ project_task:
       "low" if speculative or if no research was run.
     - open_questions: concrete questions someone would need to answer before
       committing to build this, given what's still unknown.
+
+    Respond with ONLY a single valid JSON object — no markdown code fences,
+    no commentary before or after — matching exactly this shape:
+    {"ideas": [{"name": "...", "goal": "...", "kpi": "...", "package": "...",
+    "rationale": "...", "niche_rationale": "...", "evidence": ["..."],
+    "confidence": "low|medium|high", "open_questions": ["..."]}]}
   expected_output: >
-    A list of project/use-case ideas tailored to the user's specific
-    audience, domain, and requested count, each with a name, goal, KPI,
-    recommended package, niche rationale, cited evidence (or an empty list
-    if no research was run), a confidence level, and open validation
-    questions.
+    A single JSON object (no markdown fences, no extra text) with an
+    "ideas" list tailored to the user's specific audience, domain, and
+    requested count, each with a name, goal, KPI, recommended package,
+    niche rationale, cited evidence (or an empty list if no research was
+    run), a confidence level, and open validation questions.
   agent: project_advisor
 
 research_task:
@@ -134,12 +140,18 @@ market_analysis_task:
     research above literally says "(no research was run)", return an empty
     list — never invent or paraphrase findings that weren't actually
     looked up.
+
+    Respond with ONLY a single valid JSON object — no markdown code fences,
+    no commentary before or after — matching exactly this shape (use an
+    empty "niches" list if nothing clears the bar):
+    {"niches": [{"niche": "...", "audience": "...", "evidence": ["..."]}]}
   expected_output: >
-    A list of 0-3 specific niches that survived screening, each naming a
-    recurring task/workflow pain point (not a restated finding or broad
-    category), who experiences it, and the research finding (with URL)
-    that inspired it. Empty if no research was run, or if nothing above
-    genuinely clears the bar.
+    A single JSON object (no markdown fences, no extra text) with a
+    "niches" list of 0-3 specific niches that survived screening, each
+    naming a recurring task/workflow pain point (not a restated finding or
+    broad category), who experiences it, and the research finding (with
+    URL) that inspired it. Empty if no research was run, or if nothing
+    above genuinely clears the bar.
   agent: market_analyst
 
 builder_task:
@@ -166,9 +178,16 @@ builder_task:
     similar tools already exist. Produce exactly one assessment in this
     case, covering the user's request as a whole rather than a specific
     niche.
+
+    Respond with ONLY a single valid JSON object — no markdown code fences,
+    no commentary before or after — matching exactly this shape:
+    {"assessments": [{"niche": "...", "differentiation": "low|medium|high",
+    "differentiation_rationale": "...", "recommended_package": "...",
+    "key_requirements": ["..."], "risks": ["..."]}]}
   expected_output: >
-    One build assessment per candidate niche above (or exactly one,
-    covering the user's request as a whole, if no market analysis was
-    run), each with a differentiation level and rationale, a recommended
-    package, key requirements, and risks.
+    A single JSON object (no markdown fences, no extra text) with an
+    "assessments" list: one build assessment per candidate niche above (or
+    exactly one, covering the user's request as a whole, if no market
+    analysis was run), each with a differentiation level and rationale, a
+    recommended package, key requirements, and risks.
   agent: builder

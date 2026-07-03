@@ -5,11 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Published pricing, used to estimate (not bill) run cost. Named constants
 # rather than inline literals since providers change pricing independently
-# of this codebase — update here when they do. Priced for
-# llama-3.3-70b-versatile (the default groq_model below) — update alongside
-# it if the default model changes.
-GROQ_INPUT_PRICE_PER_MILLION_TOKENS = 0.59
-GROQ_OUTPUT_PRICE_PER_MILLION_TOKENS = 0.79
+# of this codebase — update here when they do. Priced for gpt-oss-120b (the
+# default groq_model below) — update alongside it if the default model changes.
+GROQ_INPUT_PRICE_PER_MILLION_TOKENS = 0.15
+GROQ_OUTPUT_PRICE_PER_MILLION_TOKENS = 0.60
 TAVILY_PRICE_PER_CREDIT = 0.008  # 1 basic Tavily search ≈ 1 credit
 
 
@@ -22,7 +21,7 @@ class Settings(BaseSettings):
     # needed when the researcher agent is used, so it can't be required here.
     groq_api_key: str = ""
     tavily_api_key: str = ""
-    groq_model: str = "groq/llama-3.3-70b-versatile"
+    groq_model: str = "groq/openai/gpt-oss-120b"
     groq_temperature: float = 0.2
     tavily_max_results: int = 5
     tavily_search_depth: Literal["basic", "advanced"] = "basic"

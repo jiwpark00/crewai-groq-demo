@@ -22,3 +22,12 @@ class RateLimitError(CrewDemoError):
         if retry_after is not None:
             message += f" Retry after {retry_after}s."
         super().__init__(message)
+
+
+class StructuredOutputParseError(CrewDemoError):
+    def __init__(self, task_name: str, attempts: int) -> None:
+        self.task_name = task_name
+        self.attempts = attempts
+        super().__init__(
+            f"{task_name} produced unparseable structured output {attempts} times in a row."
+        )

@@ -10,14 +10,17 @@ from crewai import LLM, Agent, Crew, Task
 from crewai.project import CrewBase, agent, task
 from crewai.types.usage_metrics import UsageMetrics
 from litellm.exceptions import RateLimitError as LiteLLMRateLimitError
+from pydantic import BaseModel, ValidationError
 
 from crewai_groq_demo.exceptions import (
     MissingAPIKeyError,
     RateLimitError,
     ResearchRetryExhaustedError,
+    StructuredOutputParseError,
 )
 from crewai_groq_demo.models import BuildPlan, MarketAnalysis, ProjectIdeaList
 from crewai_groq_demo.settings import get_settings
+from crewai_groq_demo.structured_output import parse_structured_output
 from crewai_groq_demo.tools.counting_tavily_search_tool import CountingTavilySearchTool
 
 _crewai_cache.mark_cache_breakpoint = lambda msg: msg
@@ -94,7 +97,7 @@ class GroqDemoCrew:
 
     @task
     def project_task(self) -> Task:
-        return Task(config=self.tasks_config["project_task"], output_pydantic=ProjectIdeaList)
+        return Task(config=self.tasks_config["project_task"])
 
     @task
     def research_task(self) -> Task:
@@ -102,13 +105,48 @@ class GroqDemoCrew:
 
     @task
     def market_analysis_task(self) -> Task:
-        return Task(
-            config=self.tasks_config["market_analysis_task"], output_pydantic=MarketAnalysis
-        )
+        return Task(config=self.tasks_config["market_analysis_task"])
 
     @task
     def builder_task(self) -> Task:
-        return Task(config=self.tasks_config["builder_task"], output_pydantic=BuildPlan)
+        return Task(config=self.tasks_config["builder_task"])
+
+
+def _kickoff_with_structured_output[T: BaseModel](
+    crew: Crew,
+    inputs: dict[str, str],
+    model: type[T],
+    task_name: str,
+    max_attempts: int = 3,
+) -> tuple[T, UsageMetrics]:
+    """Run `crew.kickoff` and parse its raw text output into `model`,
+    retrying (same exponential backoff as run_research) if the response
+    doesn't parse — one bad generation shouldn't be fatal, same rationale as
+    run_research's tool_use_failed retry. Unlike run_research, a rate limit
+    here is not retried; it's converted and raised immediately, matching
+    this function's previous (pre-refactor) behavior.
+
+    Tasks passed here must NOT use `output_pydantic`/`output_json` — see the
+    module-level tasks in this file and `structured_output.py` for why.
+    """
+    total_usage = UsageMetrics()
+    last_error: ValidationError | None = None
+    for attempt in range(max_attempts):
+        if attempt > 0:
+            time.sleep(2**attempt)
+        try:
+            result = crew.kickoff(inputs=inputs)
+        except LiteLLMRateLimitError as error:
+            raise RateLimitError(provider="groq") from error
+        if crew.usage_metrics:
+            total_usage.add_usage_metrics(crew.usage_metrics)
+        try:
+            parsed = parse_structured_output(str(result), model)
+        except ValidationError as error:
+            last_error = error
+            continue
+        return parsed, total_usage
+    raise StructuredOutputParseError(task_name=task_name, attempts=max_attempts) from last_error
 
 
 class TeachingResult(NamedTuple):
@@ -163,17 +201,16 @@ def run_project(
         agents=[crew_definition.project_advisor()],
         tasks=[crew_definition.project_task()],
     )
-    try:
-        result = crew.kickoff(
-            inputs={
-                "user_prompt": user_prompt,
-                "teaching_result": teaching_result,
-                "research_result": research_result,
-            }
-        )
-    except LiteLLMRateLimitError as error:
-        raise RateLimitError(provider="groq") from error
-    project_ideas: ProjectIdeaList = result.pydantic
+    project_ideas, usage = _kickoff_with_structured_output(
+        crew,
+        {
+            "user_prompt": user_prompt,
+            "teaching_result": teaching_result,
+            "research_result": research_result,
+        },
+        ProjectIdeaList,
+        task_name="project_task",
+    )
 
     if research_result.strip() == NO_RESEARCH_TEXT:
         # Don't trust the model to self-report low confidence when there's
@@ -186,7 +223,7 @@ def run_project(
         with open(output_path, "w", encoding="utf-8") as file:
             file.write(project_ideas.to_markdown())
 
-    return ProjectResult(project_ideas, crew.usage_metrics or UsageMetrics())
+    return ProjectResult(project_ideas, usage)
 
 
 class ResearchResult(NamedTuple):
@@ -310,13 +347,12 @@ def run_market_analysis(user_prompt: str, research_result: str) -> MarketAnalysi
         agents=[crew_definition.market_analyst()],
         tasks=[crew_definition.market_analysis_task()],
     )
-    try:
-        result = crew.kickoff(
-            inputs={"user_prompt": user_prompt, "research_result": research_result}
-        )
-    except LiteLLMRateLimitError as error:
-        raise RateLimitError(provider="groq") from error
-    analysis: MarketAnalysis = result.pydantic
+    analysis, usage = _kickoff_with_structured_output(
+        crew,
+        {"user_prompt": user_prompt, "research_result": research_result},
+        MarketAnalysis,
+        task_name="market_analysis_task",
+    )
 
     if research_result.strip() == NO_RESEARCH_TEXT:
         # Same reasoning as run_project's confidence-forcing: don't trust the
@@ -324,7 +360,7 @@ def run_market_analysis(user_prompt: str, research_result: str) -> MarketAnalysi
         # a niche in — enforce it rather than risk fabricated-looking niches.
         analysis.niches = []
 
-    return MarketAnalysisResult(analysis, crew.usage_metrics or UsageMetrics())
+    return MarketAnalysisResult(analysis, usage)
 
 
 NO_MARKET_ANALYSIS_TEXT = "(no market analysis was run)"
@@ -355,9 +391,10 @@ def run_builder(user_prompt: str, niches_text: str) -> BuilderResult:
         agents=[crew_definition.builder()],
         tasks=[crew_definition.builder_task()],
     )
-    try:
-        result = crew.kickoff(inputs={"user_prompt": user_prompt, "niches_text": niches_text})
-    except LiteLLMRateLimitError as error:
-        raise RateLimitError(provider="groq") from error
-    plan: BuildPlan = result.pydantic
-    return BuilderResult(plan, crew.usage_metrics or UsageMetrics())
+    plan, usage = _kickoff_with_structured_output(
+        crew,
+        {"user_prompt": user_prompt, "niches_text": niches_text},
+        BuildPlan,
+        task_name="builder_task",
+    )
+    return BuilderResult(plan, usage)

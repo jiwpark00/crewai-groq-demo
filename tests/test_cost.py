@@ -38,8 +38,9 @@ def test_estimate_tavily_cost_advanced_search_is_two_credits_per_search() -> Non
 
 def test_format_groq_cost_flags_untracked_structured_output_calls() -> None:
     """successful_requests == 0 is how CrewAI's output_pydantic/InternalInstructor
-    path (which never calls _track_token_usage_internal) looks from the outside —
-    distinct from a real call that happened to use 0 tokens.
+    path (which never calls _track_token_usage_internal) would look from the
+    outside — distinct from a real call that happened to use 0 tokens. No task
+    currently uses that path, but the guard stays in place defensively.
     """
     assert "unavailable" in format_groq_cost(UsageMetrics())
 

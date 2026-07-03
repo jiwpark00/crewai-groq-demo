@@ -27,13 +27,15 @@ def estimate_tavily_cost(search_count: int, search_depth: Literal["basic", "adva
 def format_groq_cost(usage: UsageMetrics) -> str:
     """Render a Groq call's estimated cost, or flag when it can't be known.
 
-    CrewAI's `output_pydantic`/`response_model` tasks (e.g. the project
-    advisor) go through an InternalInstructor path that never calls
-    `_track_token_usage_internal` (confirmed in CrewAI's `llm.py`
-    `_handle_non_streaming_response`), so `usage` comes back all-zero —
-    including `successful_requests`, which is the one field a real tracked
-    call always sets to at least 1. That all-zero pattern is how we tell
-    "genuinely free" apart from "CrewAI didn't tell us."
+    No task in this codebase currently uses CrewAI's `output_pydantic`/
+    `response_model` (see `crew.py`'s `_kickoff_with_structured_output` for
+    why), but that path goes through an InternalInstructor mechanism that
+    never calls `_track_token_usage_internal` (confirmed in CrewAI's
+    `llm.py` `_handle_non_streaming_response`), so `usage` would come back
+    all-zero — including `successful_requests`, which is the one field a
+    real tracked call always sets to at least 1. Kept as a defensive guard
+    in case that path is ever reintroduced; that all-zero pattern is how
+    we'd tell "genuinely free" apart from "CrewAI didn't tell us."
     """
     if usage.successful_requests == 0:
         return "cost unavailable (CrewAI doesn't track tokens for structured/pydantic outputs)"

@@ -47,10 +47,9 @@ def test_run_teaching_returns_text_and_usage() -> None:
 
 
 def _project_kickoff_returning(ideas: ProjectIdeaList, usage: UsageMetrics) -> Any:
-    def _side_effect(crew_self: Any, inputs: dict[str, Any] | None = None) -> Any:
+    def _side_effect(crew_self: Any, inputs: dict[str, Any] | None = None) -> str:
         crew_self.usage_metrics = usage
-        result = type("Result", (), {"pydantic": ideas})()
-        return result
+        return ideas.model_dump_json()
 
     return _side_effect
 
