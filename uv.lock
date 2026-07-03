@@ -671,7 +671,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "crewai", extras = ["litellm"], specifier = ">=1.15.1" },
-    { name = "crewai-tools", extras = ["tavily"], specifier = ">=1.15.1" },
+    { name = "crewai-tools", specifier = ">=1.15.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "streamlit", specifier = ">=1.58.0" },
     { name = "tavily-python", specifier = ">=0.7.26" },

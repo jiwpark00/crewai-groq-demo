@@ -1,9 +1,21 @@
-from crewai_groq_demo.crew import run_project, run_teaching
+from crewai_groq_demo.crew import run_project, run_research, run_teaching
 
 user_prompt = "What can I build with agentic AI as an entrepreneur?"
 
-teaching_result = run_teaching(user_prompt)
-print("=== Teacher's Explanation ===")
+run_research_choice = input(
+    "Run web research first? This makes a Tavily API call. [y/N]: "
+).strip().lower()
+
+if run_research_choice == "y":
+    research_result, search_count = run_research(user_prompt)
+    search_word = "search" if search_count == 1 else "searches"
+    print(f"\n=== Researcher's Findings ({search_count} {search_word}) ===")
+    print(research_result)
+else:
+    research_result = "(no research was run)"
+
+teaching_result = run_teaching(user_prompt, research_result)
+print("\n=== Teacher's Explanation ===")
 print(teaching_result)
 
 proceed = input(

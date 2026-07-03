@@ -16,13 +16,15 @@ user_prompt = st.text_area(
     height=120,
 )
 
-if "teaching_result" not in st.session_state:
-    st.session_state.teaching_result = None
-    st.session_state.project_result = None
-    st.session_state.gated_prompt = None
-    st.session_state.research_result = None
-    st.session_state.research_prompt = None
-    st.session_state.research_search_count = None
+for key in (
+    "teaching_result",
+    "project_result",
+    "gated_prompt",
+    "research_result",
+    "research_prompt",
+    "research_search_count",
+):
+    st.session_state.setdefault(key, None)
 
 run_research_button = st.button("Run Researcher")
 
@@ -46,8 +48,12 @@ if st.session_state.research_result:
 
     search_count = st.session_state.research_search_count
     search_word = "search" if search_count == 1 else "searches"
-    if search_count and search_count > 1:
-        st.caption(f"⚠️ Ran {search_count} {search_word} for this request, not just one.")
+    if search_count == 0:
+        st.error(
+            "Ran 0 searches — these findings were not actually looked up and may be hallucinated."
+        )
+    elif search_count > 1:
+        st.warning(f"⚠️ Ran {search_count} {search_word} for this request, not just one.")
     else:
         st.caption(f"Ran {search_count} {search_word} for this request.")
 
