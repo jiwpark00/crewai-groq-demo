@@ -177,6 +177,35 @@ def test_raises_rate_limit_error_when_all_attempts_rate_limited() -> None:
             run_research("teach me about agents")
 
     assert exc_info.value.provider == "groq"
+    # This test's error message doesn't match Groq's real wording, so parsing
+    # comes up empty — confirmed separately in test_crew_rate_limit_parsing.py.
+    assert exc_info.value.retry_after is None
+    assert exc_info.value.limit_type is None
+
+
+def test_rate_limit_error_carries_retry_after_and_limit_type_when_parseable() -> None:
+    def _rate_limited(_query: str) -> Callable[[Any], Any]:
+        error = LiteLLMRateLimitError(
+            message=(
+                "Rate limit reached for model `openai/gpt-oss-120b` on tokens "
+                "per minute (TPM): Limit 8000, Used 7492, Requested 4458. "
+                "Please try again in 29.625s."
+            ),
+            llm_provider="groq",
+            model="groq/openai/gpt-oss-120b",
+        )
+        return _fail_with(error, _query)
+
+    side_effect = _kickoff_side_effect(
+        [_rate_limited("q1"), _rate_limited("q2"), _rate_limited("q3")]
+    )
+
+    with patch("crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect):
+        with pytest.raises(RateLimitError) as exc_info:
+            run_research("teach me about agents")
+
+    assert exc_info.value.retry_after == 29.625
+    assert exc_info.value.limit_type == "TPM"
 
 
 def test_backs_off_with_exponential_sleep_between_retries(_no_real_sleep: MagicMock) -> None:
@@ -191,6 +220,94 @@ def test_backs_off_with_exponential_sleep_between_retries(_no_real_sleep: MagicM
         run_research("teach me about agents")
 
     _no_real_sleep.assert_called_once_with(2)
+
+
+def test_rate_limit_retry_waits_for_groq_reported_retry_after(_no_real_sleep: MagicMock) -> None:
+    """Confirmed live: Groq's real TPM cooldowns (20-30s) are much longer than
+    the fixed 2s/4s exponential schedule, so retrying on that schedule was
+    guaranteed to hit the same wall again. Retries must wait as long as
+    Groq's own error says is actually needed instead.
+    """
+    rate_limit_error = LiteLLMRateLimitError(
+        message=(
+            "Rate limit reached for model `openai/gpt-oss-120b` on tokens per "
+            "minute (TPM): Limit 8000, Used 7000, Requested 2000. Please try "
+            "again in 15.5s."
+        ),
+        llm_provider="groq",
+        model="groq/openai/gpt-oss-120b",
+    )
+    side_effect = _kickoff_side_effect(
+        [_fail_with(rate_limit_error, "q1"), _succeed_with("ok", "q2")]
+    )
+
+    with patch("crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect):
+        run_research("teach me about agents")
+
+    _no_real_sleep.assert_called_once_with(15.5)
+
+
+def test_rate_limit_retry_caps_wait_at_30_seconds(_no_real_sleep: MagicMock) -> None:
+    rate_limit_error = LiteLLMRateLimitError(
+        message=(
+            "Rate limit reached for model `openai/gpt-oss-120b` on tokens per "
+            "minute (TPM): Limit 8000, Used 7999, Requested 2000. Please try "
+            "again in 90s."
+        ),
+        llm_provider="groq",
+        model="groq/openai/gpt-oss-120b",
+    )
+    side_effect = _kickoff_side_effect(
+        [_fail_with(rate_limit_error, "q1"), _succeed_with("ok", "q2")]
+    )
+
+    with patch("crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect):
+        run_research("teach me about agents")
+
+    _no_real_sleep.assert_called_once_with(30.0)
+
+
+def test_rate_limit_retry_falls_back_to_exponential_backoff_when_unparseable(
+    _no_real_sleep: MagicMock,
+) -> None:
+    rate_limit_error = LiteLLMRateLimitError(
+        message="rate limited", llm_provider="groq", model="groq/openai/gpt-oss-120b"
+    )
+    side_effect = _kickoff_side_effect(
+        [_fail_with(rate_limit_error, "q1"), _succeed_with("ok", "q2")]
+    )
+
+    with patch("crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect):
+        run_research("teach me about agents")
+
+    _no_real_sleep.assert_called_once_with(2)
+
+
+def test_daily_quota_rate_limit_gives_up_without_retrying(_no_real_sleep: MagicMock) -> None:
+    """TPD/RPD won't refill within this call's lifetime, so burning the
+    remaining attempts on a guaranteed repeat failure just wastes tokens —
+    give up after the first hit instead of retrying.
+    """
+    rate_limit_error = LiteLLMRateLimitError(
+        message=(
+            "Rate limit reached for model `openai/gpt-oss-120b` on tokens per "
+            "day (TPD): Limit 200000, Used 200000, Requested 500. Please try "
+            "again in 43200s."
+        ),
+        llm_provider="groq",
+        model="groq/openai/gpt-oss-120b",
+    )
+    side_effect = _kickoff_side_effect([_fail_with(rate_limit_error, "q1")])
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect
+    ) as mocked_kickoff:
+        with pytest.raises(RateLimitError) as exc_info:
+            run_research("teach me about agents")
+
+    mocked_kickoff.assert_called_once()
+    _no_real_sleep.assert_not_called()
+    assert exc_info.value.limit_type == "TPD"
 
 
 def test_researcher_agent_uses_tavily_settings(monkeypatch: pytest.MonkeyPatch) -> None:

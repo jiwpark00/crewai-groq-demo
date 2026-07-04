@@ -15,10 +15,19 @@ class ResearchRetryExhaustedError(CrewDemoError):
 
 
 class RateLimitError(CrewDemoError):
-    def __init__(self, provider: str, retry_after: float | None = None) -> None:
+    def __init__(
+        self,
+        provider: str,
+        retry_after: float | None = None,
+        limit_type: str | None = None,
+    ) -> None:
         self.provider = provider
         self.retry_after = retry_after
-        message = f"Rate limited by {provider}."
+        self.limit_type = limit_type
+        message = f"Rate limited by {provider}"
+        if limit_type is not None:
+            message += f" ({limit_type} limit)"
+        message += "."
         if retry_after is not None:
             message += f" Retry after {retry_after}s."
         super().__init__(message)

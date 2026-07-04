@@ -240,9 +240,11 @@ five in the Streamlit UI if you opt into Market Analyst and Builder too:
   to a fairly tight 8K-tokens-per-minute burst limit — running all five
   Streamlit stages back-to-back with no pause between clicks can hit it
   (confirmed live; the app catches this as `RateLimitError` and shows a
-  clean message rather than crashing). Space clicks out by ~15-20s if you
-  hit it. This is the second model tried here — see "Model history" below
-  for what didn't work and why.
+  clean message — e.g. `Rate limited by groq (TPM limit). Retry after
+  29.6s.` — parsed from Groq's own error text, rather than crashing or
+  showing a bare "rate limited" with no indication of how long to wait).
+  Space clicks out by ~15-20s if you hit it. This is the second model tried
+  here — see "Model history" below for what didn't work and why.
 - **Tavily**: the researcher makes at most 2 searches per run (capped in
   `tasks.yaml`), well within Tavily's free monthly search quota. `advanced`
   search depth costs 2 credits/search vs. 1 for `basic` (Tavily's own
@@ -316,6 +318,13 @@ configured with a paid fallback here.
   or conversation state bleed into the retry. (Tavily rate limits aren't
   cleanly catchable here — CrewAI's tool-execution layer swallows them into
   agent-visible text before they'd reach this code.)
+- **Actionable rate-limit messages**: `crew.py`'s `_parse_groq_rate_limit`
+  extracts the retry-after seconds and limit type (TPM/RPM/TPD/RPD) straight
+  out of Groq's own error text and threads them into `RateLimitError`, so
+  the CLI/Streamlit UI show e.g. `Rate limited by groq (TPM limit). Retry
+  after 29.6s.` instead of a bare `Rate limited by groq.` with no way to
+  tell a 5-second hiccup from a longer block. Falls back to the bare
+  message if Groq's wording doesn't match (not a stable contract).
 - **Typed config and errors**: `settings.py` (`pydantic-settings`) replaces
   scattered `os.getenv()` calls with a validated settings object;
   `exceptions.py` defines `MissingAPIKeyError`, `RateLimitError`, and

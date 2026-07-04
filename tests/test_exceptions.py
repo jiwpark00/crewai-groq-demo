@@ -41,6 +41,21 @@ def test_rate_limit_error_with_retry_after() -> None:
     assert str(error) == "Rate limited by groq. Retry after 1.5s."
 
 
+def test_rate_limit_error_with_limit_type() -> None:
+    error = RateLimitError(provider="groq", limit_type="TPM")
+
+    assert error.limit_type == "TPM"
+    assert str(error) == "Rate limited by groq (TPM limit)."
+
+
+def test_rate_limit_error_with_retry_after_and_limit_type() -> None:
+    error = RateLimitError(provider="groq", retry_after=29.625, limit_type="TPM")
+
+    assert error.retry_after == 29.625
+    assert error.limit_type == "TPM"
+    assert str(error) == "Rate limited by groq (TPM limit). Retry after 29.625s."
+
+
 def test_crew_demo_error_is_plain_exception() -> None:
     error = CrewDemoError("boom")
 

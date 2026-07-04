@@ -1,3 +1,4 @@
+import re
 import time
 from typing import Literal, NamedTuple
 
@@ -24,6 +25,25 @@ from crewai_groq_demo.structured_output import parse_structured_output
 from crewai_groq_demo.tools.counting_tavily_search_tool import CountingTavilySearchTool
 
 _crewai_cache.mark_cache_breakpoint = lambda msg: msg
+
+_RETRY_AFTER_RE = re.compile(r"try again in ([\d.]+)s", re.IGNORECASE)
+_LIMIT_TYPE_RE = re.compile(r"\((TPM|RPM|TPD|RPD)\)")
+
+
+def _parse_groq_rate_limit(error: Exception) -> tuple[float | None, str | None]:
+    """Best-effort extraction of retry-after seconds and limit type (TPM/RPM/
+    TPD/RPD) from Groq's rate-limit error text, e.g. "...on tokens per minute
+    (TPM): Limit 8000, Used 7492, Requested 4458. Please try again in
+    29.625s...". Groq's wording isn't a stable contract, so this returns
+    (None, None) rather than raising if the message doesn't match — a worse
+    error message beats a crash while handling a rate limit.
+    """
+    text = str(error)
+    retry_match = _RETRY_AFTER_RE.search(text)
+    retry_after = float(retry_match.group(1)) if retry_match else None
+    limit_match = _LIMIT_TYPE_RE.search(text)
+    limit_type = limit_match.group(1) if limit_match else None
+    return retry_after, limit_type
 
 
 @CrewBase
@@ -137,7 +157,10 @@ def _kickoff_with_structured_output[T: BaseModel](
         try:
             result = crew.kickoff(inputs=inputs)
         except LiteLLMRateLimitError as error:
-            raise RateLimitError(provider="groq") from error
+            retry_after, limit_type = _parse_groq_rate_limit(error)
+            raise RateLimitError(
+                provider="groq", retry_after=retry_after, limit_type=limit_type
+            ) from error
         if crew.usage_metrics:
             total_usage.add_usage_metrics(crew.usage_metrics)
         try:
@@ -166,7 +189,10 @@ def run_teaching(user_prompt: str, research_result: str) -> TeachingResult:
             inputs={"user_prompt": user_prompt, "research_result": research_result}
         )
     except LiteLLMRateLimitError as error:
-        raise RateLimitError(provider="groq") from error
+        retry_after, limit_type = _parse_groq_rate_limit(error)
+        raise RateLimitError(
+            provider="groq", retry_after=retry_after, limit_type=limit_type
+        ) from error
     return TeachingResult(str(result), crew.usage_metrics or UsageMetrics())
 
 
@@ -273,9 +299,14 @@ def run_research(
     Tavily/Groq — a different depth is treated as a different request.
 
     Builds a fresh agent/crew per attempt so a failed attempt's conversation
-    state and search count don't bleed into the retry. Retries back off
-    exponentially (2s, 4s) so a rate-limited attempt doesn't immediately
-    repeat into another rate limit.
+    state and search count don't bleed into the retry. Malformed-tool-call
+    retries back off exponentially (2s, 4s). Rate-limit retries instead wait
+    however long Groq's own error says is actually needed (capped at 30s) —
+    confirmed live that Groq's real TPM cooldowns (20-30s) are much longer
+    than the fixed exponential schedule, so retrying on the old schedule was
+    guaranteed to hit the same wall again. A daily-quota limit (TPD/RPD)
+    gives up immediately instead of retrying — it won't refill within this
+    call's lifetime, so burning remaining attempts on it wastes tokens.
     """
     effective_depth = search_depth or get_settings().tavily_search_depth
     cache_key = (user_prompt, effective_depth)
@@ -287,10 +318,11 @@ def run_research(
     total_search_count = 0
     total_usage = UsageMetrics()
     last_error: Exception | None = None
+    next_sleep_seconds = 0.0
 
     for attempt in range(max_attempts):
         if attempt > 0:
-            time.sleep(2**attempt)
+            time.sleep(next_sleep_seconds)
 
         crew_definition = GroqDemoCrew(search_depth=search_depth)
         research_task = crew_definition.research_task()
@@ -310,12 +342,19 @@ def run_research(
         except LiteLLMRateLimitError as error:
             total_search_count += search_tool.call_count
             last_error = error
+            retry_after, limit_type = _parse_groq_rate_limit(error)
+            if limit_type in ("TPD", "RPD"):
+                break
+            next_sleep_seconds = (
+                min(retry_after, 30.0) if retry_after is not None else 2 ** (attempt + 1)
+            )
             continue
         except Exception as error:
             total_search_count += search_tool.call_count
             if "tool_use_failed" not in str(error):
                 raise
             last_error = error
+            next_sleep_seconds = 2 ** (attempt + 1)
             continue
 
         successful_search_count = search_tool.call_count
@@ -336,7 +375,10 @@ def run_research(
         return research_result
 
     if isinstance(last_error, LiteLLMRateLimitError):
-        raise RateLimitError(provider="groq") from last_error
+        retry_after, limit_type = _parse_groq_rate_limit(last_error)
+        raise RateLimitError(
+            provider="groq", retry_after=retry_after, limit_type=limit_type
+        ) from last_error
     raise ResearchRetryExhaustedError(attempts=max_attempts) from last_error
 
 
