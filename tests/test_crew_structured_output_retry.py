@@ -79,16 +79,65 @@ def test_exhausts_retries_on_repeated_malformed_json() -> None:
     assert exc_info.value.task_name == "builder_task"
 
 
-def test_rate_limit_raises_immediately_without_retry() -> None:
+def test_rate_limit_retries_and_succeeds_using_groq_reported_retry_after(
+    _no_real_sleep: MagicMock,
+) -> None:
+    plan = _sample_plan()
+    error = LiteLLMRateLimitError(
+        message=(
+            "Rate limit reached for model `openai/gpt-oss-120b` on tokens per "
+            "minute (TPM): Limit 8000, Used 7000, Requested 2000. Please try "
+            "again in 15.5s."
+        ),
+        llm_provider="groq",
+        model="groq/openai/gpt-oss-120b",
+    )
+    side_effect = _kickoff_side_effect([error, plan.model_dump_json()])
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect
+    ) as mocked_kickoff:
+        result = run_builder("user prompt", "some niches text")
+
+    assert result.plan == plan
+    assert mocked_kickoff.call_count == 2
+    _no_real_sleep.assert_called_once_with(15.5)
+
+
+def test_rate_limit_exhausts_retries_when_unparseable(_no_real_sleep: MagicMock) -> None:
     error = LiteLLMRateLimitError(
         message="rate limited", llm_provider="groq", model="groq/openai/gpt-oss-120b"
+    )
+    side_effect = _kickoff_side_effect([error, error, error])
+
+    with patch(
+        "crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect
+    ) as mocked_kickoff:
+        with pytest.raises(RateLimitError) as exc_info:
+            run_builder("user prompt", "some niches text")
+
+    assert mocked_kickoff.call_count == 3
+    assert exc_info.value.retry_after is None
+    assert exc_info.value.limit_type is None
+
+
+def test_daily_quota_rate_limit_gives_up_without_retrying() -> None:
+    error = LiteLLMRateLimitError(
+        message=(
+            "Rate limit reached for model `openai/gpt-oss-120b` on tokens per "
+            "day (TPD): Limit 200000, Used 200000, Requested 500. Please try "
+            "again in 43200s."
+        ),
+        llm_provider="groq",
+        model="groq/openai/gpt-oss-120b",
     )
     side_effect = _kickoff_side_effect([error])
 
     with patch(
         "crewai_groq_demo.crew.Crew.kickoff", autospec=True, side_effect=side_effect
     ) as mocked_kickoff:
-        with pytest.raises(RateLimitError):
+        with pytest.raises(RateLimitError) as exc_info:
             run_builder("user prompt", "some niches text")
 
     mocked_kickoff.assert_called_once()
+    assert exc_info.value.limit_type == "TPD"

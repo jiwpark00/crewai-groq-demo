@@ -167,15 +167,21 @@ a live LLM in the loop:
   never exercise CrewAI's real task-agent resolution.
 - `crew.py`'s `run_teaching`/`run_project` — usage returned alongside each
   result, `output.md` only written when `output_path` is given, confidence
-  forced to `"low"` when no research was run, and `builder_result` passed
+  forced to `"low"` when no research was run, `builder_result` passed
   through to `project_task`'s inputs (defaulting to `NO_BUILDER_TEXT` when
-  Builder didn't run)
+  Builder didn't run), and `run_teaching`'s single rate-limit retry
+  (succeeds using Groq's reported retry-after, gives up after one retry on
+  a persistent limit, gives up immediately on TPD/RPD)
 - `structured_output.py`'s `parse_structured_output` — clean JSON, JSON
   wrapped in markdown fences, JSON with surrounding prose, and both
   malformed-JSON and schema-mismatch failures
 - `crew.py`'s `_kickoff_with_structured_output` (via `run_builder`) — retry-
-  then-succeed on malformed JSON, retries exhausted, and Groq rate limits
-  raised immediately without retry
+  then-succeed on malformed JSON, retries exhausted, retry-then-succeed on
+  a TPM/RPM rate limit using Groq's reported retry-after, retries exhausted
+  when unparseable, and immediate give-up on TPD/RPD
+- `crew.py`'s agent construction — `teacher`/`project_advisor`/
+  `market_analyst`/`builder` all cap `max_iter=1`
+  (`test_crew_agent_iteration_limits.py`)
 
 `ruff` and `mypy` are configured in `pyproject.toml`
 (`select = ["E", "F", "I", "UP", "B"]` for ruff; fairly strict mypy with a
@@ -238,13 +244,14 @@ five in the Streamlit UI if you opt into Market Analyst and Builder too:
 
 - **Groq**: `openai/gpt-oss-120b` is available on Groq's free tier, subject
   to a fairly tight 8K-tokens-per-minute burst limit — running all five
-  Streamlit stages back-to-back with no pause between clicks can hit it
-  (confirmed live; the app catches this as `RateLimitError` and shows a
-  clean message — e.g. `Rate limited by groq (TPM limit). Retry after
-  29.6s.` — parsed from Groq's own error text, rather than crashing or
-  showing a bare "rate limited" with no indication of how long to wait).
-  Space clicks out by ~15-20s if you hit it. This is the second model tried
-  here — see "Model history" below for what didn't work and why.
+  Streamlit stages back-to-back with no pause between clicks can hit it.
+  Every stage now retries once, waiting however long Groq's own error says
+  is actually needed (capped at 30s) before giving up — most rate limits
+  become a slightly slower success rather than a hard failure. If it still
+  fails, the app shows a clean message — e.g. `Rate limited by groq (TPM
+  limit). Retry after 29.6s.` — rather than crashing or showing a bare
+  "rate limited" with no indication of how long to wait. This is the second
+  model tried here — see "Model history" below for what didn't work and why.
 - **Tavily**: the researcher makes at most 2 searches per run (capped in
   `tasks.yaml`), well within Tavily's free monthly search quota. `advanced`
   search depth costs 2 credits/search vs. 1 for `basic` (Tavily's own
@@ -325,6 +332,25 @@ configured with a paid fallback here.
   after 29.6s.` instead of a bare `Rate limited by groq.` with no way to
   tell a 5-second hiccup from a longer block. Falls back to the bare
   message if Groq's wording doesn't match (not a stable contract).
+- **Rate limits are retried everywhere, not just in research**: all five
+  stages now wait for Groq's real reported retry-after (capped at 30s)
+  before giving up on a TPM/RPM hit — `_kickoff_with_structured_output`
+  (project advisor, market analyst, builder) retries it within its existing
+  parse-retry loop; `run_teaching` gets a single retry-then-raise. A TPD/RPD
+  (daily) limit gives up immediately in all cases, since no wait within a
+  single call clears it.
+- **Capped agent iteration budgets**: `teacher`, `project_advisor`,
+  `market_analyst`, and `builder` all set `max_iter=1` — none of them use
+  tools, so they should resolve in one pass. CrewAI's default (25) meant an
+  unrecognized "final answer" could silently trigger up to 25 real,
+  token-consuming Groq calls per task before ever reaching this codebase's
+  error handling; confirmed only `researcher` (which needs a couple of
+  tool-call iterations, so keeps `max_iter=3`) had this constrained before.
+  Note this is a different, more impactful mechanism than CrewAI's
+  `max_retry_limit`, which doesn't apply here — `litellm`-raised exceptions
+  (both `RateLimitError` and `tool_use_failed`) bypass that retry entirely
+  and re-raise immediately (confirmed in CrewAI's
+  `agent/core.py::_check_execution_error`).
 - **Typed config and errors**: `settings.py` (`pydantic-settings`) replaces
   scattered `os.getenv()` calls with a validated settings object;
   `exceptions.py` defines `MissingAPIKeyError`, `RateLimitError`, and

@@ -80,19 +80,26 @@ class GroqDemoCrew:
 
     @agent
     def teacher(self) -> Agent:
-        return Agent(config=self.agents_config["teacher"], llm=self.llm)
+        # max_iter=1: this agent has no tools, so it should resolve in a
+        # single pass. CrewAI's default (25) means a model that produces a
+        # response its executor doesn't recognize as "final" could silently
+        # re-prompt up to 25 times — each one a real, token-consuming Groq
+        # call — before ever reaching our own retry/error-handling layer.
+        # Confirmed live: only `researcher` had this constrained before;
+        # the other agents ran at the 25-iteration default.
+        return Agent(config=self.agents_config["teacher"], llm=self.llm, max_iter=1)
 
     @agent
     def project_advisor(self) -> Agent:
-        return Agent(config=self.agents_config["project_advisor"], llm=self.llm)
+        return Agent(config=self.agents_config["project_advisor"], llm=self.llm, max_iter=1)
 
     @agent
     def market_analyst(self) -> Agent:
-        return Agent(config=self.agents_config["market_analyst"], llm=self.llm)
+        return Agent(config=self.agents_config["market_analyst"], llm=self.llm, max_iter=1)
 
     @agent
     def builder(self) -> Agent:
-        return Agent(config=self.agents_config["builder"], llm=self.llm)
+        return Agent(config=self.agents_config["builder"], llm=self.llm, max_iter=1)
 
     @agent
     def researcher(self) -> Agent:
@@ -140,35 +147,52 @@ def _kickoff_with_structured_output[T: BaseModel](
     max_attempts: int = 3,
 ) -> tuple[T, UsageMetrics]:
     """Run `crew.kickoff` and parse its raw text output into `model`,
-    retrying (same exponential backoff as run_research) if the response
-    doesn't parse — one bad generation shouldn't be fatal, same rationale as
-    run_research's tool_use_failed retry. Unlike run_research, a rate limit
-    here is not retried; it's converted and raised immediately, matching
-    this function's previous (pre-refactor) behavior.
+    retrying if the response doesn't parse or Groq rate-limits the request —
+    one bad generation shouldn't be fatal, same rationale as run_research's
+    tool_use_failed retry. Parse-failure retries back off exponentially (2s,
+    4s); rate-limit retries instead wait however long Groq's own error says
+    is needed (capped at 30s) — see run_research's docstring for why a fixed
+    schedule doesn't work for real TPM cooldowns. A daily-quota limit
+    (TPD/RPD) gives up immediately instead of retrying, since it won't clear
+    within this call's lifetime.
 
     Tasks passed here must NOT use `output_pydantic`/`output_json` — see the
     module-level tasks in this file and `structured_output.py` for why.
     """
     total_usage = UsageMetrics()
-    last_error: ValidationError | None = None
+    last_error: Exception | None = None
+    next_sleep_seconds = 0.0
     for attempt in range(max_attempts):
         if attempt > 0:
-            time.sleep(2**attempt)
+            time.sleep(next_sleep_seconds)
         try:
             result = crew.kickoff(inputs=inputs)
         except LiteLLMRateLimitError as error:
+            last_error = error
             retry_after, limit_type = _parse_groq_rate_limit(error)
-            raise RateLimitError(
-                provider="groq", retry_after=retry_after, limit_type=limit_type
-            ) from error
+            if limit_type in ("TPD", "RPD"):
+                raise RateLimitError(
+                    provider="groq", retry_after=retry_after, limit_type=limit_type
+                ) from error
+            next_sleep_seconds = (
+                min(retry_after, 30.0) if retry_after is not None else 2 ** (attempt + 1)
+            )
+            continue
         if crew.usage_metrics:
             total_usage.add_usage_metrics(crew.usage_metrics)
         try:
             parsed = parse_structured_output(str(result), model)
         except ValidationError as error:
             last_error = error
+            next_sleep_seconds = 2 ** (attempt + 1)
             continue
         return parsed, total_usage
+
+    if isinstance(last_error, LiteLLMRateLimitError):
+        retry_after, limit_type = _parse_groq_rate_limit(last_error)
+        raise RateLimitError(
+            provider="groq", retry_after=retry_after, limit_type=limit_type
+        ) from last_error
     raise StructuredOutputParseError(task_name=task_name, attempts=max_attempts) from last_error
 
 
@@ -178,21 +202,35 @@ class TeachingResult(NamedTuple):
 
 
 def run_teaching(user_prompt: str, research_result: str) -> TeachingResult:
-    """Run only the teacher agent and return its explanation."""
+    """Run only the teacher agent and return its explanation.
+
+    Retries once on a TPM/RPM rate limit, waiting however long Groq's own
+    error says is needed (capped at 30s) — see run_research's docstring for
+    why a fixed backoff doesn't work. Gives up immediately on a daily-quota
+    limit (TPD/RPD), since no wait here will clear it.
+    """
     crew_definition = GroqDemoCrew()
     crew = Crew(
         agents=[crew_definition.teacher()],
         tasks=[crew_definition.teaching_task()],
     )
+    inputs = {"user_prompt": user_prompt, "research_result": research_result}
     try:
-        result = crew.kickoff(
-            inputs={"user_prompt": user_prompt, "research_result": research_result}
-        )
+        result = crew.kickoff(inputs=inputs)
     except LiteLLMRateLimitError as error:
         retry_after, limit_type = _parse_groq_rate_limit(error)
-        raise RateLimitError(
-            provider="groq", retry_after=retry_after, limit_type=limit_type
-        ) from error
+        if limit_type in ("TPD", "RPD"):
+            raise RateLimitError(
+                provider="groq", retry_after=retry_after, limit_type=limit_type
+            ) from error
+        time.sleep(min(retry_after, 30.0) if retry_after is not None else 5.0)
+        try:
+            result = crew.kickoff(inputs=inputs)
+        except LiteLLMRateLimitError as retry_error:
+            retry_after, limit_type = _parse_groq_rate_limit(retry_error)
+            raise RateLimitError(
+                provider="groq", retry_after=retry_after, limit_type=limit_type
+            ) from retry_error
     return TeachingResult(str(result), crew.usage_metrics or UsageMetrics())
 
 
